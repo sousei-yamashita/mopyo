@@ -1,4 +1,3 @@
-import "./style.css";
 import { scenes, encounterChoices } from "./story.js";
 import { initialState, makeResult } from "./engine.js";
 import { creatureSvg } from "./creature.js";
@@ -15,95 +14,94 @@ function loadState() {
   return initialState();
 }
 
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function setState(next) {
-  state = { ...state, ...next };
-  save();
-  render();
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
+function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+function setState(patch) { state = { ...state, ...patch }; persist(); render(); }
 
 function render() {
-  document.body.dataset.phase = state.phase;
-  if (state.phase === "intro") renderIntro();
-  else if (state.phase === "story") renderStory();
-  else if (state.phase === "pause") renderPause();
-  else if (state.phase === "reveal") renderReveal();
-  else if (state.phase === "encounter") renderEncounter();
-  else renderCard();
+  if (state.phase === "intro") return intro();
+  if (state.phase === "journey") return journey();
+  if (state.phase === "darkness") return darkness();
+  if (state.phase === "reveal") return reveal();
+  if (state.phase === "encounter") return encounter();
+  return result();
 }
 
-function renderIntro() {
+function intro() {
   app.innerHTML = `<section class="screen intro">
-    <div class="weather" aria-hidden="true"><i></i><i></i><i></i></div>
-    <div class="intro-copy"><p class="kicker">きょうの帰り道</p><h1>少しだけ、<br>道を外れてみる。</h1><p>夕方。待ち合わせには、少し遅れた。</p></div>
-    <button class="primary start" type="button">角を曲がる <span>→</span></button>
+    <div class="intro-mark">FIRST ENCOUNTER / 00</div>
+    <div><p class="eyebrow">MOPYO PROTOTYPE</p><h1>少しだけ<br>出かけます。</h1><p>いつもの帰り道です。たぶん。</p></div>
+    <button class="primary" id="start">出かける <span>→</span></button>
   </section>`;
-  app.querySelector("button").addEventListener("click", () => setState({ phase: "story" }));
+  app.querySelector("#start").onclick = () => setState({ phase:"journey", scene:0 });
 }
 
-function renderStory() {
+function journey() {
   const scene = scenes[state.scene];
-  app.innerHTML = `<section class="screen story">
-    <header class="story-head"><button class="back" aria-label="ひとつ前へ">←</button><div class="progress" aria-label="${state.scene + 1} / ${scenes.length}"><span style="width:${((state.scene + 1) / scenes.length) * 100}%"></span></div><b>${String(state.scene + 1).padStart(2, "0")}</b></header>
-    <div class="scene-art art-${state.scene}" aria-hidden="true"><div class="moon"></div><div class="door"></div><div class="object"></div></div>
-    <article class="scene-copy"><p class="eyebrow">${scene.eyebrow}</p><h2>${scene.title}</h2><p>${scene.text}</p></article>
-    <div class="choices">${scene.choices.map((choice, index) => `<button type="button" data-choice="${index}"><span>${choice.label}</span><small>${choice.hint}</small></button>`).join("")}</div>
+  app.innerHTML = `<section class="screen journey">
+    <header><span>0${state.scene + 1}</span><div class="progress">${scenes.map((_,i)=>`<i class="${i <= state.scene ? "on" : ""}"></i>`).join("")}</div><span>0${scenes.length}</span></header>
+    <div class="scene-copy"><p class="eyebrow">${scene.label}</p><h2>${scene.text}</h2></div>
+    <div class="choices">${scene.choices.map((c,i)=>`<button data-choice="${i}"><b>${String.fromCharCode(65+i)}</b><span>${c.text}</span><em>→</em></button>`).join("")}</div>
+    ${state.scene > 0 ? '<button class="back" id="back">← ひとつ前へ</button>' : ""}
   </section>`;
-  app.querySelector(".back").addEventListener("click", goBack);
-  app.querySelectorAll("[data-choice]").forEach(button => button.addEventListener("click", () => choose(Number(button.dataset.choice))));
-}
-
-function goBack() {
-  if (state.scene === 0) return setState({ phase: "intro" });
-  const answers = state.answers.slice(0, -1);
-  setState({ scene: state.scene - 1, answers, artifact: state.scene - 1 < 5 ? null : state.artifact });
+  app.querySelectorAll("[data-choice]").forEach(btn => btn.onclick = () => choose(Number(btn.dataset.choice)));
+  if (state.scene > 0) app.querySelector("#back").onclick = () => {
+    const answers = state.answers.slice(0,-1);
+    setState({ scene:state.scene-1, answers, artifact: state.scene-1 < 4 ? null : state.artifact });
+  };
 }
 
 function choose(index) {
-  const scene = scenes[state.scene];
-  const answers = [...state.answers.slice(0, state.scene), index];
-  const artifact = scene.choices[index].artifact || state.artifact;
-  if (state.scene < scenes.length - 1) setState({ answers, artifact, scene: state.scene + 1 });
-  else {
-    state = { ...state, answers, artifact, phase: "pause" };
-    save(); render();
-  }
+  const answers = [...state.answers, index];
+  let artifact = state.artifact;
+  if (state.scene === 4) artifact = scenes[4].choices[index].artifact;
+  if (state.scene === scenes.length - 1) setState({ answers, artifact, phase:"darkness" });
+  else setState({ answers, artifact, scene:state.scene+1 });
 }
 
-function renderPause() {
-  app.innerHTML = `<section class="screen darkness" aria-live="polite"><div><p>……</p><p class="late">何か、ついてきたようです。</p></div></section>`;
-  window.setTimeout(() => { if (state.phase === "pause") setState({ phase: "reveal", result: makeResult(state, scenes) }); }, 2400);
+function darkness() {
+  app.innerHTML = `<section class="screen darkness"><div><p>帰り道は、いつもと同じです。</p><p class="late">……たぶん。</p></div></section>`;
+  window.setTimeout(() => { if (state.phase === "darkness") setState({ phase:"reveal" }); }, 1900);
 }
 
-function renderReveal() {
-  if (!state.result) state.result = makeResult(state, scenes);
-  app.innerHTML = `<section class="screen reveal"><p class="eyebrow">FIRST SIGHT</p><div class="glow">${creatureSvg(state.result)}</div><div class="reveal-copy"><h2>いた。</h2><p>こちらを見ています。</p></div><button class="primary" type="button">もう少し見る</button></section>`;
-  app.querySelector("button").addEventListener("click", () => setState({ phase: "encounter" }));
-}
+function getResult() { return makeResult(state, scenes); }
 
-function renderEncounter() {
-  app.innerHTML = `<section class="screen encounter"><header><p class="eyebrow">FIRST ENCOUNTER</p><h2>どうする？</h2></header><div class="small-creature">${creatureSvg(state.result)}</div><div class="choices compact">${encounterChoices.map((label, index) => `<button type="button" data-encounter="${index}"><span>${label}</span><b>→</b></button>`).join("")}</div></section>`;
-  app.querySelectorAll("[data-encounter]").forEach(button => button.addEventListener("click", () => setState({ phase: "card", encounter: encounterChoices[Number(button.dataset.encounter)] })));
-}
-
-function renderCard() {
-  const result = state.result;
-  app.innerHTML = `<section class="screen result"><header class="result-head"><p class="eyebrow">FIRST ENCOUNTER</p><h1>ついてきたもの</h1></header>
-    <article class="card">
-      <div class="card-top"><span>MOPYO / INDIVIDUAL</span><span>${result.id}</span></div>
-      <div class="portrait">${creatureSvg(result)}</div>
-      <div class="identity"><div><small>INDIVIDUAL ID</small><strong>${result.id}</strong></div><div><small>ENCOUNTER</small><strong>${result.date}</strong></div></div>
-      <div class="artifact-row"><span class="artifact-icon">${state.artifact.includes("鍵") ? "⌑" : state.artifact.includes("鈴") ? "◌" : "●"}</span><div><small>ARTIFACT</small><strong>${result.artifact}</strong></div></div>
-      <div class="quirks"><small>OBSERVED QUIRKS</small><ul>${result.quirks.map(q => `<li>${q}</li>`).join("")}</ul></div>
-      <div class="encounter-note">最初に「${state.encounter}」を選んだ。</div>
-    </article>
-    <button class="restart" type="button">もう一度、道を歩く</button>
+function reveal() {
+  const r = getResult();
+  app.innerHTML = `<section class="screen reveal">
+    <p class="eyebrow">UNKNOWN INDIVIDUAL / ${r.id}</p>
+    <div class="glow">${creatureSvg(r)}</div>
+    <div class="reveal-copy"><h2>何か、ついてきたようです。</h2><p>こちらを見ています。</p></div>
+    <button class="primary light" id="next">もう少し見る <span>→</span></button>
   </section>`;
-  app.querySelector(".restart").addEventListener("click", () => { localStorage.removeItem(STORAGE_KEY); state = initialState(); render(); });
+  app.querySelector("#next").onclick = () => setState({ phase:"encounter" });
+}
+
+function encounter() {
+  const r = getResult();
+  app.innerHTML = `<section class="screen encounter">
+    <header><p class="eyebrow">FIRST ENCOUNTER</p><h2>こちらを見ています。<br>どうする？</h2></header>
+    <div class="small-creature">${creatureSvg(r, "creature small")}</div>
+    <div class="choices compact">${encounterChoices.map((c,i)=>`<button data-enc="${i}"><b>${c.short}</b><em>→</em></button>`).join("")}</div>
+  </section>`;
+  app.querySelectorAll("[data-enc]").forEach(btn => btn.onclick = () => setState({ encounter:Number(btn.dataset.enc), phase:"result" }));
+}
+
+function result() {
+  const r = getResult();
+  const enc = encounterChoices[state.encounter] || encounterChoices[3];
+  app.innerHTML = `<section class="screen result">
+    <header class="result-head"><p class="eyebrow">FIRST ENCOUNTER RECORD</p><h1>出会ったもの。</h1></header>
+    <article class="card">
+      <div class="card-top"><span>MOPYO / FIELD RECORD</span><span>${r.id}</span></div>
+      <div class="portrait">${creatureSvg(r)}</div>
+      <div class="identity"><div><small>INDIVIDUAL ID</small><strong>${r.id}</strong></div><div><small>ENCOUNTERED</small><strong>${r.date}</strong></div></div>
+      <div class="artifact-row"><div class="artifact-icon">◇</div><div><small>持っているもの</small><strong>${r.artifact}</strong></div></div>
+      <div class="quirks"><small>観察されたこと</small><ul>${r.quirks.map(q=>`<li>${q}</li>`).join("")}</ul></div>
+      <div class="encounter-note">最初にあなたは「${enc.record}」</div>
+    </article>
+    <button class="restart" id="restart">最初からやり直す</button>
+  </section>`;
+  app.querySelector("#restart").onclick = () => { localStorage.removeItem(STORAGE_KEY); state = initialState(); render(); };
 }
 
 render();
