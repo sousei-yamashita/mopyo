@@ -1,14 +1,16 @@
 import { scenes, encounterChoices } from "./story.js";
-import { initialState, makeResult } from "./engine.js";
+import { initialState, makeResult, resultShareText } from "./engine.js";
 import { creatureSvg } from "./creature.js";
 
-const STORAGE_KEY = "mopyo-v01-journey";
+const STORAGE_KEY = "mopyo-v02-journey";
+const LEGACY_STORAGE_KEY = "mopyo-v01-journey";
 const app = document.querySelector("#app");
 let state = loadState();
 
 function loadState() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const serialized = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
+    const saved = JSON.parse(serialized);
     if (saved && saved.phase && Number.isInteger(saved.scene)) return saved;
   } catch { /* 壊れた保存データは静かに捨てる */ }
   return initialState();
@@ -16,6 +18,7 @@ function loadState() {
 
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
 
 function setState(next) {
@@ -100,9 +103,41 @@ function renderCard() {
       <div class="quirks"><small>OBSERVED QUIRKS</small><ul>${result.quirks.map(q => `<li>${q}</li>`).join("")}</ul></div>
       <div class="encounter-note">最初に「${state.encounter}」を選んだ。</div>
     </article>
-    <button class="restart" type="button">もう一度、道を歩く</button>
+    <div class="result-actions">
+      <button class="primary share" type="button"><span>この遭遇を共有する</span><span aria-hidden="true">↗</span></button>
+      <p class="share-status" role="status" aria-live="polite"></p>
+      <button class="restart" type="button">もう一度、道を歩く</button>
+    </div>
   </section>`;
-  app.querySelector(".restart").addEventListener("click", () => { localStorage.removeItem(STORAGE_KEY); state = initialState(); render(); });
+  app.querySelector(".share").addEventListener("click", shareResult);
+  app.querySelector(".restart").addEventListener("click", () => {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    state = initialState();
+    render();
+  });
+}
+
+async function shareResult() {
+  const button = app.querySelector(".share");
+  const status = app.querySelector(".share-status");
+  const shareData = { title: `ついてきたもの ${state.result.id}`, text: resultShareText(state.result, state.encounter) };
+  button.disabled = true;
+  try {
+    if (navigator.share) {
+      await navigator.share(shareData);
+      status.textContent = "共有しました。";
+    } else if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(shareData.text);
+      status.textContent = "遭遇の記録をコピーしました。";
+    } else {
+      status.textContent = "このブラウザでは共有できませんでした。";
+    }
+  } catch (error) {
+    if (error?.name !== "AbortError") status.textContent = "共有できませんでした。もう一度お試しください。";
+  } finally {
+    button.disabled = false;
+  }
 }
 
 render();

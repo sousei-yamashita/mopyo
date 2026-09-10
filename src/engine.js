@@ -53,3 +53,15 @@ export function makeResult(state, scenes, date = new Date()) {
     }
   };
 }
+
+export function resultShareText(result, encounter) {
+  const lines = [
+    `ついてきたもの ${result.id}`,
+    `遭遇日: ${result.date}`,
+    `持ちもの: ${result.artifact}`,
+    "",
+    ...result.quirks.map(quirk => `・${quirk}`)
+  ];
+  if (encounter) lines.push("", `最初に「${encounter}」を選んだ。`);
+  return lines.join("\n");
+}
