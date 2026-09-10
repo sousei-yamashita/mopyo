@@ -52,12 +52,14 @@ export const scenes = [
   },
   {
     eyebrow: "家まであと一つ角 17:19",
-    title: "曲がり角の先で、誰かが息を整えている。",
-    text: "影だけが道へ長く伸びている。手元の拾いものは、さっきより少しだけ温かい。",
+    title: "後ろから音がついてくる。",
+    text: "止まると、音も止まる。",
     choices: [
-      { label: "角の手前で立ち止まる", hint: "影が動き出すのを待つ", delta: { approach: 1, structure: 1 } },
-      { label: "足音を立てて角へ近づく", hint: "こちらの居場所を先に知らせる", delta: { tempo: 1, structure: 1 } },
-      { label: "拾いものを握って歩き続ける", hint: "影を見ないまま角を曲がる", delta: { approach: -1, retention: 1 } }
+      { label: "振り返る", hint: "", delta: { approach: 1, structure: 1 } },
+      { label: "待つ", hint: "", delta: { tempo: -1, social: 1 } },
+      { label: "走る", hint: "", delta: { approach: -1, tempo: 1 } },
+      { label: "気にせず歩く", hint: "", delta: { approach: -1, structure: 1 } },
+      { label: "隠れる", hint: "", delta: { approach: -1, social: -1 } }
     ]
   }
 ];
