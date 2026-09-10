@@ -15,7 +15,7 @@ export function creatureSvg(result, className = "creature") {
     : '<path d="M98 113q8 6 16 0M148 114q8 6 16 0" class="line"/>';
   const mark = Array.from({ length: phenotype.markings }, (_, i) => `<circle cx="${118 + i * 13}" cy="78" r="3" class="mark"/>`).join("");
   const artifactShape = artifact.includes("鍵") ? '<path d="M124 162a8 8 0 1 0-8-8l-11 11 5 5 4-4 4 4 5-5"/>' : artifact.includes("鈴") ? '<path d="M116 166h22l-4-6v-9c0-12-14-12-14 0v9Zm8 3h6"/>' : '<path d="M116 157c0-9 16-13 21-3 5 11-7 19-18 15-6-2-7-8-3-12Zm7 3c2 3 7 2 7-2"/>';
-  return `<svg class="${className}" viewBox="0 0 250 240" role="img" aria-label="${result.id} の姿">
+  return `<svg class="${className}" style="--creature-hue:${species.hue}" viewBox="0 0 250 240" role="img" aria-label="${result.id} の姿">
     <g class="ears">${ears}</g><g class="body">${body}</g>${mark}
     <g class="face">${eye}<path d="M127 128q6 5 12 0" class="line"/></g>
     <g class="feet"><path d="M83 194q-4 17 15 17M167 195q5 16-14 16"/></g>

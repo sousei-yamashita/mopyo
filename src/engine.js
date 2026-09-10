@@ -4,12 +4,40 @@ const species = [
   { code: "MUGU", body: "wide", ears: "sprout", hue: 272 }
 ];
 
+export const PHASES = ["intro", "story", "pause", "reveal", "encounter", "card"];
+
 export function initialState() {
   return { phase: "intro", scene: 0, answers: [], artifact: null, encounter: null, seed: randomSeed(), result: null };
 }
 
 export function randomSeed() {
   return Math.floor(Math.random() * 0xffffff);
+}
+
+/** Convert persisted, user-controlled data to a renderer-safe journey. */
+export function restoreState(saved, scenes) {
+  if (!saved || typeof saved !== "object" || !PHASES.includes(saved.phase)) return null;
+  if (!Number.isInteger(saved.scene) || saved.scene < 0 || saved.scene >= scenes.length) return null;
+  if (!Number.isInteger(saved.seed) || saved.seed < 0 || saved.seed > 0xffffff) return null;
+
+  const requiredAnswers = saved.phase === "intro" ? 0 : Math.min(saved.scene, scenes.length - 1);
+  if (!Array.isArray(saved.answers) || saved.answers.length < requiredAnswers) return null;
+  const answers = saved.answers.slice(0, scenes.length).map((answer, index) =>
+    Number.isInteger(answer) && scenes[index]?.choices[answer] ? answer : null
+  );
+  if (answers.slice(0, requiredAnswers).includes(null)) return null;
+
+  const identityIndex = scenes.findIndex(scene => scene.identity);
+  const artifact = answers[identityIndex] == null
+    ? null
+    : scenes[identityIndex].choices[answers[identityIndex]].artifact || null;
+  const journeyComplete = ["pause", "reveal", "encounter", "card"].includes(saved.phase);
+  if (journeyComplete && (answers.length !== scenes.length || answers.includes(null) || !artifact)) return null;
+  if (saved.phase === "card" && typeof saved.encounter !== "string") return null;
+
+  const state = { ...initialState(), ...saved, answers, artifact, seed: saved.seed };
+  if (journeyComplete) state.result = makeResult(state, scenes, saved.result?.encounteredAt || new Date());
+  return state;
 }
 
 export function scoresFor(scenes, answers) {
@@ -23,6 +51,7 @@ export function scoresFor(scenes, answers) {
 }
 
 export function makeResult(state, scenes, date = new Date()) {
+  const encounterDate = date instanceof Date ? date : new Date(date);
   const scores = scoresFor(scenes, state.answers);
   const base = species[state.seed % species.length];
   const serial = state.seed.toString(36).toUpperCase().padStart(5, "0").slice(-5);
@@ -43,7 +72,8 @@ export function makeResult(state, scenes, date = new Date()) {
     id: `${base.code}-${serial}`,
     species: base,
     artifact: state.artifact || "不明なもの",
-    date: new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date),
+    date: new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" }).format(encounterDate),
+    encounteredAt: encounterDate.toISOString(),
     scores,
     quirks,
     phenotype: {

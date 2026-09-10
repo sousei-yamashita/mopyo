@@ -1,15 +1,17 @@
 import { scenes, encounterChoices } from "./story.js";
-import { initialState, makeResult } from "./engine.js";
+import { initialState, makeResult, restoreState } from "./engine.js";
 import { creatureSvg } from "./creature.js";
 
 const STORAGE_KEY = "mopyo-v01-journey";
 const app = document.querySelector("#app");
 let state = loadState();
+let pauseTimer;
 
 function loadState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved && saved.phase && Number.isInteger(saved.scene)) return saved;
+    const restored = restoreState(saved, scenes);
+    if (restored) return restored;
   } catch { /* 壊れた保存データは静かに捨てる */ }
   return initialState();
 }
@@ -26,6 +28,7 @@ function setState(next) {
 }
 
 function render() {
+  window.clearTimeout(pauseTimer);
   document.body.dataset.phase = state.phase;
   if (state.phase === "intro") renderIntro();
   else if (state.phase === "story") renderStory();
@@ -74,8 +77,11 @@ function choose(index) {
 }
 
 function renderPause() {
-  app.innerHTML = `<section class="screen darkness" aria-live="polite"><div><p>……</p><p class="late">何か、ついてきたようです。</p></div></section>`;
-  window.setTimeout(() => { if (state.phase === "pause") setState({ phase: "reveal", result: makeResult(state, scenes) }); }, 2400);
+  app.innerHTML = `<section class="screen darkness" aria-live="polite" aria-atomic="true"><div><p>……</p><p class="late">何か、ついてきたようです。</p></div><button class="skip" type="button">先へ進む</button></section>`;
+  const reveal = () => { if (state.phase === "pause") setState({ phase: "reveal", result: makeResult(state, scenes) }); };
+  app.querySelector(".skip").addEventListener("click", reveal);
+  const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 50 : 2400;
+  pauseTimer = window.setTimeout(reveal, delay);
 }
 
 function renderReveal() {
@@ -96,7 +102,7 @@ function renderCard() {
       <div class="card-top"><span>MOPYO / INDIVIDUAL</span><span>${result.id}</span></div>
       <div class="portrait">${creatureSvg(result)}</div>
       <div class="identity"><div><small>INDIVIDUAL ID</small><strong>${result.id}</strong></div><div><small>ENCOUNTER</small><strong>${result.date}</strong></div></div>
-      <div class="artifact-row"><span class="artifact-icon">${state.artifact.includes("鍵") ? "⌑" : state.artifact.includes("鈴") ? "◌" : "●"}</span><div><small>ARTIFACT</small><strong>${result.artifact}</strong></div></div>
+      <div class="artifact-row"><span class="artifact-icon">${result.artifact.includes("鍵") ? "⌑" : result.artifact.includes("鈴") ? "◌" : "●"}</span><div><small>ARTIFACT</small><strong>${result.artifact}</strong></div></div>
       <div class="quirks"><small>OBSERVED QUIRKS</small><ul>${result.quirks.map(q => `<li>${q}</li>`).join("")}</ul></div>
       <div class="encounter-note">最初に「${state.encounter}」を選んだ。</div>
     </article>
