@@ -59,12 +59,13 @@ export const scenes = [
   {
     eyebrow: "家まであと一つ角",
     title: "後ろから音がついてくる。",
-    text: "止まると音も止まる。振り返ると、電柱の陰から丸い耳だけが見えた。",
+    text: "止まると、音も止まる。",
     choices: [
-      { label: "その場で待つ", hint: "耳を見る", delta: { approach: 1, structure: 1 } },
-      { label: "ゆっくり近づく", hint: "足音を立てる", delta: { tempo: 1, structure: 1 } },
-      { label: "前を向いて歩く", hint: "家へ向かう", delta: { approach: -1, retention: 1 } },
-      { label: "物陰に隠れる", hint: "向こうを待つ", delta: { tempo: -1, approach: 1 } }
+      { label: "振り返る", hint: "", delta: { approach: 1, structure: 1 } },
+      { label: "待つ", hint: "", delta: { tempo: -1, social: 1 } },
+      { label: "走る", hint: "", delta: { approach: -1, tempo: 1 } },
+      { label: "気にせず歩く", hint: "", delta: { approach: -1, structure: 1 } },
+      { label: "隠れる", hint: "", delta: { approach: -1, social: -1 } }
     ]
   }
 ];
