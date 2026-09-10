@@ -1,4 +1,3 @@
-import "./style.css";
 import { scenes, encounterChoices } from "./story.js";
 import { initialState, makeResult } from "./engine.js";
 import { creatureSvg } from "./creature.js";
