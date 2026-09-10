@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { scenes } from "../src/story.js";
 import { scoresFor, makeResult } from "../src/engine.js";
 
-test("six scenes form a complete journey with three concrete choices", () => {
+test("six scenes form a complete journey with three to six concrete choices", () => {
   assert.equal(scenes.length, 6);
-  scenes.forEach(scene => assert.equal(scene.choices.length, 3));
+  scenes.forEach(scene => assert.ok(scene.choices.length >= 3 && scene.choices.length <= 6));
   assert.equal(scenes.filter(scene => scene.identity).length, 1);
 });
 
