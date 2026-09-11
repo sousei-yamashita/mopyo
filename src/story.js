@@ -1,71 +1,71 @@
 export const scenes = [
   {
-    eyebrow: "いつもの帰り道",
-    title: "帰り道の分かれ道。",
-    text: "家まではあと十分。商店街、川沿い、住宅街のどこからでも帰れる。",
+    eyebrow: "駅前",
+    title: "駅を出た。",
+    text: "まず、どこへ行く？",
     choices: [
-      { label: "商店街を通る", hint: "明るい道", delta: { approach: 1, tempo: 1 } },
-      { label: "川沿いを歩く", hint: "静かな道", delta: { tempo: -1, structure: -1 } },
-      { label: "住宅街を歩く", hint: "慣れた道", delta: { structure: 1, social: -1 } },
-      { label: "コンビニに寄る", hint: "少し寄り道", delta: { social: 1, retention: 1 } }
+      { label: "コンビニへ行く", delta: { approach: 1, tempo: 1 } },
+      { label: "本屋へ行く", delta: { tempo: -1, structure: -1 } },
+      { label: "公園へ行く", delta: { structure: 1, social: -1 } },
+      { label: "まっすぐ歩く", delta: { social: 1, retention: 1 } }
     ]
   },
   {
-    eyebrow: "商店街のはずれ",
-    title: "知らない猫がついてくる。",
-    text: "立ち止まると、猫も少し後ろで止まった。",
+    eyebrow: "歩道",
+    title: "猫が道をふさいでいる。",
+    text: "こちらを見ている。",
     choices: [
-      { label: "撫でる", hint: "手を出す", delta: { social: 1, approach: 1 } },
-      { label: "立ち止まる", hint: "猫を待つ", delta: { social: 1, tempo: -1 } },
-      { label: "振り返る", hint: "顔を見る", delta: { social: -1, approach: -1 } },
-      { label: "そのまま歩く", hint: "気にしない", delta: { tempo: 1, structure: 1 } }
+      { label: "撫でる", delta: { social: 1, approach: 1 } },
+      { label: "道をあけるまで待つ", delta: { social: 1, tempo: -1 } },
+      { label: "写真を撮る", delta: { social: -1, approach: -1 } },
+      { label: "よけて歩く", delta: { tempo: 1, structure: 1 } }
     ]
   },
   {
-    eyebrow: "道ばたの自販機",
-    title: "お茶が二本出てきた。",
-    text: "一本しか買っていない。取り出し口には、同じお茶が二本ある。",
+    eyebrow: "角を曲がった先",
+    title: "知らない路地がある。",
+    text: "地図には載っていない。",
     choices: [
-      { label: "一本だけ取る", hint: "買った分", delta: { structure: 1, social: 1 } },
-      { label: "二本とも取る", hint: "両手で持つ", delta: { tempo: 1, approach: 1 } },
-      { label: "少し待つ", hint: "自販機を見る", delta: { tempo: -1, social: -1 } },
-      { label: "返却口を見る", hint: "下を確かめる", delta: { structure: 1, retention: 1 } },
-      { label: "もう一度押す", hint: "ボタンを押す", delta: { approach: 1, tempo: 1 } }
+      { label: "入る", delta: { structure: 1, social: 1 } },
+      { label: "入口から覗く", delta: { tempo: 1, approach: 1 } },
+      { label: "写真を撮る", delta: { tempo: -1, social: -1 } },
+      { label: "地図を確認する", delta: { structure: 1, retention: 1 } },
+      { label: "通り過ぎる", delta: { approach: 1, tempo: 1 } }
     ]
   },
   {
-    eyebrow: "空き地の前",
-    title: "自分の家の玄関がある。",
-    text: "空き地に、玄関だけが立っている。ドアの向こうから、家のテレビの音がする。",
+    eyebrow: "路地の奥",
+    title: "ドアだけが立っている。",
+    text: "向こう側は見えない。",
     choices: [
-      { label: "音を聞く", hint: "ドアに近づく", delta: { approach: 1, tempo: -1 } },
-      { label: "ドアを開ける", hint: "取っ手を回す", delta: { approach: 1, tempo: 1 } },
-      { label: "写真を撮る", hint: "形を残す", delta: { approach: -1, retention: 1 } },
-      { label: "家へ急ぐ", hint: "空き地を離れる", delta: { tempo: 1, structure: 1 } },
-      { label: "声をかける", hint: "返事を待つ", delta: { social: 1, approach: 1 } }
+      { label: "耳を当てる", delta: { approach: 1, tempo: -1 } },
+      { label: "ドアを開ける", delta: { approach: 1, tempo: 1 } },
+      { label: "写真を撮る", delta: { approach: -1, retention: 1 } },
+      { label: "来た道を戻る", delta: { tempo: 1, structure: 1 } },
+      { label: "ノックする", delta: { social: 1, approach: 1 } }
     ]
   },
   {
-    eyebrow: "玄関の前",
+    eyebrow: "ドアの前",
     title: "足元に三つ落ちている。",
-    text: "どれも見たことがない。拾えるのは、ひとつだけだ。",
+    text: "ひとつだけ拾う。",
     identity: true,
     choices: [
-      { label: "歯のない鍵を拾う", hint: "冷たい鍵", artifact: "歯のない鍵", icon: "⌑", delta: { retention: 1 } },
-      { label: "鳴らない鈴を拾う", hint: "銀色の鈴", artifact: "鳴らない鈴", icon: "◌", delta: { social: 1 } },
-      { label: "穴のあいた石を拾う", hint: "青い石", artifact: "穴のあいた石", icon: "●", delta: { approach: 1 } }
+      { label: "歯のない鍵を拾う", artifact: "歯のない鍵", icon: "⌑", delta: { retention: 1 } },
+      { label: "鳴らない鈴を拾う", artifact: "鳴らない鈴", icon: "◌", delta: { social: 1 } },
+      { label: "穴のあいた石を拾う", artifact: "穴のあいた石", icon: "●", delta: { approach: 1 } }
     ]
   },
   {
-    eyebrow: "家まであと一つ角",
-    title: "後ろから音がついてくる。",
+    eyebrow: "静かな道",
+    title: "後ろから音がする。",
     text: "止まると、音も止まる。",
     choices: [
-      { label: "振り返る", hint: "", delta: { approach: 1, structure: 1 } },
-      { label: "待つ", hint: "", delta: { tempo: -1, social: 1 } },
-      { label: "走る", hint: "", delta: { approach: -1, tempo: 1 } },
-      { label: "気にせず歩く", hint: "", delta: { approach: -1, structure: 1 } },
-      { label: "隠れる", hint: "", delta: { approach: -1, social: -1 } }
+      { label: "振り返る", delta: { approach: 1, structure: 1 } },
+      { label: "待つ", delta: { tempo: -1, social: 1 } },
+      { label: "走る", delta: { approach: -1, tempo: 1 } },
+      { label: "気にせず歩く", delta: { approach: -1, structure: 1 } },
+      { label: "隠れる", delta: { approach: -1, social: -1 } }
     ]
   }
 ];
