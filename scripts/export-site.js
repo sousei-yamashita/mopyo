@@ -21,19 +21,22 @@ export async function initializePagesSite(destination, { preserve = [] } = {}) {
   return outputDir;
 }
 
-export async function exportSite(destination, { preserve = [] } = {}) {
+export async function exportSite(destination, { preserve = [], source = repoRoot } = {}) {
   const outputDir = await initializePagesSite(destination, { preserve });
+  const sourceDir = resolve(source);
 
-  await Promise.all(appEntries.map(entry => cp(join(repoRoot, entry), join(outputDir, entry), { recursive: true })));
+  await Promise.all(appEntries.map(entry => cp(join(sourceDir, entry), join(outputDir, entry), { recursive: true })));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const preserveArg = process.argv.find(argument => argument.startsWith("--preserve="));
+  const sourceArg = process.argv.find(argument => argument.startsWith("--source="));
   const rootOnly = process.argv.includes("--root-only");
   const preserve = preserveArg ? preserveArg.slice("--preserve=".length).split(",").filter(Boolean) : [];
+  const source = sourceArg ? sourceArg.slice("--source=".length) : repoRoot;
 
   const action = rootOnly ? initializePagesSite : exportSite;
-  action(process.argv[2], { preserve }).catch(error => {
+  action(process.argv[2], { preserve, source }).catch(error => {
     console.error(error.message);
     process.exitCode = 1;
   });

@@ -51,3 +51,17 @@ test("initializePagesSite leaves preview bootstrap at root .nojekyll only", asyn
   await assert.rejects(access(join(destination, "src")));
   await assert.rejects(access(join(destination, "old", "stale.txt")));
 });
+
+test("exportSite can copy from an alternate source directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mopyo-export-site-source-"));
+  const source = join(root, "source");
+  const destination = join(root, "preview");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "index.html"), "<!doctype html><title>preview</title>");
+  await writeFile(join(source, "src", "main.js"), "console.log('preview');");
+
+  await exportSite(destination, { source });
+
+  assert.equal(await readFile(join(destination, "index.html"), "utf8"), "<!doctype html><title>preview</title>");
+  assert.equal(await readFile(join(destination, "src", "main.js"), "utf8"), "console.log('preview');");
+});

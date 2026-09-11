@@ -27,8 +27,6 @@ jobs:
       contents: write
       pull-requests: write
     env:
-      MAIN_PUBLISH_MARKER: .pages-root-from-main
-      PREVIEW_DIR: previews/pr-${{ github.event.pull_request.number }}
       PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/pr-${{ github.event.pull_request.number }}/
     steps:
       - name: Checkout
@@ -45,7 +43,7 @@ jobs:
       - name: Build check
         run: npm run build
 
-      - name: Publish preview to gh-pages
+      - name: Reconcile previews on gh-pages
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -62,12 +60,7 @@ jobs:
             find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
 
-          if [ ! -f "$MAIN_PUBLISH_MARKER" ]; then
-            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --root-only --preserve=previews
-          fi
-
-          mkdir -p "$(dirname "$PREVIEW_DIR")"
-          node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR/$PREVIEW_DIR"
+          node "$GITHUB_WORKSPACE/scripts/reconcile-pages.js" preview "$PAGES_DIR"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -143,7 +136,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Remove preview from gh-pages
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Reconcile previews after PR close
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -159,7 +157,7 @@ jobs:
           fi
 
           git checkout gh-pages
-          rm -rf "$PREVIEW_DIR"
+          node "$GITHUB_WORKSPACE/scripts/reconcile-pages.js" preview "$PAGES_DIR"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -243,7 +241,6 @@ jobs:
       - name: Publish production site to gh-pages
         env:
           GH_TOKEN: ${{ github.token }}
-          MAIN_PUBLISH_MARKER: .pages-root-from-main
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -258,8 +255,7 @@ jobs:
             find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
 
-          node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --preserve=previews
-          printf 'published-from-main\n' > "$PAGES_DIR/$MAIN_PUBLISH_MARKER"
+          node "$GITHUB_WORKSPACE/scripts/reconcile-pages.js" production "$PAGES_DIR"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
