@@ -2,6 +2,18 @@ export function previewDirectoryName(number) {
   return `pr-${number}`;
 }
 
+export function normalizePreviewSources(previewSources = []) {
+  if (previewSources.length > 0) {
+    const byNumber = new Map();
+    for (const source of previewSources) {
+      if (!Number.isInteger(source?.number) || typeof source?.sha !== "string" || source.sha.length === 0) continue;
+      byNumber.set(source.number, { number: source.number, sha: source.sha });
+    }
+    return [...byNumber.values()].sort((a, b) => a.number - b.number);
+  }
+  return [];
+}
+
 export function reviewablePullNumbers(pulls, repository) {
   return [...new Set(
     pulls
@@ -56,12 +68,13 @@ async function exportRef(workspace, ref, destination) {
   await Promise.all([waitForChild(archive, "git archive"), waitForChild(untar, "tar extract")]);
 }
 
-export async function reconcilePages({ workspace, pagesDir, mode, reviewablePrs = [], productionSource = "" }) {
+export async function reconcilePages({ workspace, pagesDir, mode, previewSources = [], productionSource = "" }) {
   if (!workspace) throw new Error("workspace is required");
   if (!pagesDir) throw new Error("pagesDir is required");
   if (!["preview", "production"].includes(mode)) throw new Error("mode must be preview or production");
   if (mode === "production" && !productionSource) throw new Error("productionSource is required for production mode");
 
+  const sources = normalizePreviewSources(previewSources);
   const outputDir = resolve(pagesDir);
   const previewsRoot = join(outputDir, "previews");
   const tempRoot = await mkdtemp(join(tmpdir(), "mopyo-pages-"));
@@ -80,14 +93,14 @@ export async function reconcilePages({ workspace, pagesDir, mode, reviewablePrs 
       .filter(entry => entry.isDirectory())
       .map(entry => entry.name);
 
-    for (const entry of stalePreviewDirectories(existingPreviewEntries, reviewablePrs)) {
+    for (const entry of stalePreviewDirectories(existingPreviewEntries, sources.map(source => source.number))) {
       await rm(join(previewsRoot, entry), { recursive: true, force: true });
     }
 
-    for (const pr of reviewablePrs) {
-      const sourceDir = join(tempRoot, previewDirectoryName(pr));
-      await exportRef(workspace, `refs/pull/${pr}/head`, sourceDir);
-      await exportSite(join(previewsRoot, previewDirectoryName(pr)), { source: sourceDir });
+    for (const source of sources) {
+      const sourceDir = join(tempRoot, previewDirectoryName(source.number));
+      await exportRef(workspace, source.sha, sourceDir);
+      await exportSite(join(previewsRoot, previewDirectoryName(source.number)), { source: sourceDir });
     }
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -104,7 +117,7 @@ if (process.argv[1] && process.argv[1].endsWith("reconcile-pages.js")) {
     workspace: process.cwd(),
     pagesDir: args.get("--pages-dir"),
     mode: args.get("--mode"),
-    reviewablePrs: JSON.parse(args.get("--reviewable-prs") || "[]"),
+    previewSources: JSON.parse(args.get("--preview-sources") || "[]"),
     productionSource: args.get("--production-source") || ""
   }).catch(error => {
     console.error(error.message);

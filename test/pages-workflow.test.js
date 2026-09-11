@@ -20,6 +20,10 @@ test("pages workflow reconciles previews from open non-draft same-repository PRs
   assert.match(workflow, /pull\.head\?\.repo\?\.full_name === repository/);
 });
 
+test("pages workflow ignores fork pull_request workflow_run events before privileged writes", () => {
+  assert.match(workflow, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
+});
+
 test("privileged pages workflow checks out the default branch before running trusted scripts", () => {
   assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(workflow, /node scripts\/reconcile-pages\.js --mode production/);
@@ -38,6 +42,9 @@ test("trusted Pages reconciliation takes only static app files from PR heads", (
 
 test("write permissions stay scoped to the pages publishing jobs", () => {
   assert.equal((workflow.match(/contents: write/g) || []).length, 1);
+  assert.equal((workflow.match(/actions: read/g) || []).length, 1);
+  assert.equal((workflow.match(/pages: read/g) || []).length, 1);
+  assert.equal((workflow.match(/pull-requests: read/g) || []).length, 1);
   assert.equal((workflow.match(/pages: write/g) || []).length, 1);
   assert.equal((workflow.match(/id-token: write/g) || []).length, 1);
   assert.equal((workflow.match(/pull-requests: write/g) || []).length, 1);
@@ -51,4 +58,11 @@ test("uploaded Pages artifact excludes git metadata while keeping hidden files s
   assert.match(workflow, /Remove git metadata from Pages artifact/);
   assert.match(workflow, /rm -rf "\$\{\{ runner\.temp \}\}\/pages-site\/\.git"/);
   assert.match(workflow, /include-hidden-files: true/);
+});
+
+test("pages workflow only exports PR previews from successful CI head SHAs", () => {
+  assert.match(workflow, /workflow_id: "ci\.yml"/);
+  assert.match(workflow, /run\.head_sha === pull\.head\.sha/);
+  assert.match(workflow, /--preview-sources/);
+  assert.doesNotMatch(reconcileScript, /refs\/pull\/\\\$\{pr\}\/head/);
 });

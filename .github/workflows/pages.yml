@@ -23,17 +23,21 @@ jobs:
     if: |
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && (
         (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == github.event.repository.default_branch) ||
-        github.event.workflow_run.event == 'pull_request'
+        (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository)
       )) ||
       (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
+      pages: read
+      pull-requests: read
     outputs:
       comment_mode: ${{ steps.context.outputs.comment_mode }}
       preview_pr_number: ${{ steps.context.outputs.preview_pr_number }}
       preview_url: ${{ steps.context.outputs.preview_url }}
+      preview_sources: ${{ steps.context.outputs.preview_sources }}
     steps:
       - name: Checkout trusted Pages workflow files
         uses: actions/checkout@v4
@@ -56,10 +60,40 @@ jobs:
               per_page: 100
             });
 
-            const reviewablePullNumbers = pulls
+            const reviewablePulls = pulls
               .filter(pull => pull.state === "open" && pull.draft === false && pull.head?.repo?.full_name === repository)
-              .map(pull => pull.number)
-              .sort((a, b) => a - b);
+              .sort((a, b) => a.number - b.number);
+
+            const runsByBranch = new Map();
+            async function successfulCiAtHead(pull) {
+              const branch = pull.head?.ref;
+              if (!branch) return false;
+              if (!runsByBranch.has(branch)) {
+                const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: "ci.yml",
+                  event: "pull_request",
+                  branch,
+                  status: "completed",
+                  per_page: 100
+                });
+                runsByBranch.set(branch, runs);
+              }
+
+              return runsByBranch.get(branch).some(run =>
+                run.conclusion === "success" &&
+                run.head_sha === pull.head.sha &&
+                (run.pull_requests || []).some(triggered => triggered.number === pull.number)
+              );
+            }
+
+            const previewSources = [];
+            for (const pull of reviewablePulls) {
+              if (await successfulCiAtHead(pull)) {
+                previewSources.push({ number: pull.number, sha: pull.head.sha });
+              }
+            }
 
             let commentMode = "";
             let previewPrNumber = "";
@@ -74,7 +108,14 @@ jobs:
                 const triggerPull = (context.payload.workflow_run.pull_requests || []).find(pull =>
                   pull.head?.repo?.full_name === repository
                 );
-                if (triggerPull && reviewablePullNumbers.includes(triggerPull.number)) {
+                const triggerSource = triggerPull
+                  ? previewSources.find(source =>
+                      source.number === triggerPull.number &&
+                      source.sha === context.payload.workflow_run.head_sha
+                    )
+                  : null;
+
+                if (triggerSource) {
                   previewPrNumber = String(triggerPull.number);
                   commentMode = "preview";
                 }
@@ -88,13 +129,13 @@ jobs:
             core.setOutput("preview_pr_number", previewPrNumber);
             core.setOutput("preview_url", previewPrNumber ? `https://${context.repo.owner}.github.io/${context.repo.repo}/previews/pr-${previewPrNumber}/` : "");
             core.setOutput("production_source", productionSource);
-            core.setOutput("reviewable_prs", JSON.stringify(reviewablePullNumbers));
+            core.setOutput("preview_sources", JSON.stringify(previewSources));
 
       - name: Reconcile Pages site state
         env:
           GH_TOKEN: ${{ github.token }}
           PRODUCTION_SOURCE: ${{ steps.context.outputs.production_source }}
-          REVIEWABLE_PRS: ${{ steps.context.outputs.reviewable_prs }}
+          PREVIEW_SOURCES: ${{ steps.context.outputs.preview_sources }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -111,9 +152,9 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
           if [ -n "$PRODUCTION_SOURCE" ]; then
-            node scripts/reconcile-pages.js --mode production --pages-dir "$PAGES_DIR" --reviewable-prs "$REVIEWABLE_PRS" --production-source "$PRODUCTION_SOURCE"
+            node scripts/reconcile-pages.js --mode production --pages-dir "$PAGES_DIR" --preview-sources "$PREVIEW_SOURCES" --production-source "$PRODUCTION_SOURCE"
           else
-            node scripts/reconcile-pages.js --mode preview --pages-dir "$PAGES_DIR" --reviewable-prs "$REVIEWABLE_PRS"
+            node scripts/reconcile-pages.js --mode preview --pages-dir "$PAGES_DIR" --preview-sources "$PREVIEW_SOURCES"
           fi
 
           cd "$PAGES_DIR"

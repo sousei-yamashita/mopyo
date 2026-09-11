@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { previewDirectoryName, reviewablePullNumbers, stalePreviewDirectories } from "../scripts/reconcile-pages.js";
+import { normalizePreviewSources, previewDirectoryName, reviewablePullNumbers, stalePreviewDirectories } from "../scripts/reconcile-pages.js";
 
 test("preview directory names stay PR-scoped", () => {
   assert.equal(previewDirectoryName(24), "pr-24");
@@ -33,4 +33,20 @@ test("reviewablePullNumbers follows draft, ready, and close state transitions", 
   assert.deepEqual(reviewablePullNumbers(ready, repository), [24]);
   assert.deepEqual(stalePreviewDirectories(["pr-24"], reviewablePullNumbers(draft, repository)), ["pr-24"]);
   assert.deepEqual(stalePreviewDirectories(["pr-24"], reviewablePullNumbers(closed, repository)), ["pr-24"]);
+});
+
+test("normalizePreviewSources keeps only explicit PR-to-SHA sources", () => {
+  assert.deepEqual(
+    normalizePreviewSources([
+      { number: 24, sha: "abc" },
+      { number: 22, sha: "def" },
+      { number: 24, sha: "ghi" },
+      { number: "x", sha: "bad" },
+      { number: 30, sha: "" }
+    ]),
+    [
+      { number: 22, sha: "def" },
+      { number: 24, sha: "ghi" }
+    ]
+  );
 });
