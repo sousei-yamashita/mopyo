@@ -17,6 +17,14 @@ Automation may inspect, implement, test, review, and prepare a pull request.
 
 Automation must not silently merge to `main` or publish a production release on its own.
 
+## Official route for issue-to-agent auto-start
+
+For this repository's current **public** setup, GitHub's built-in Copilot **Automations** feature is not available, because that feature only supports **private** or **internal** repositories.
+
+If maintainers want a no-click path from **issue opened** to **AI work started** using official GitHub mechanisms, the supported repository-managed option is a **GitHub Agentic Workflow** committed in `.github/workflows/`, triggered when an issue is created, and reviewed through pull requests like other repository automation.
+
+In this repository's current personal-account setup, that workflow should use a repository secret such as `COPILOT_GITHUB_TOKEN` for Copilot requests. If no such workflow is present, starting work from an issue remains a manual handoff step (for example, assigning the issue in GitHub).
+
 ## Every pull request
 
 Check at minimum:
