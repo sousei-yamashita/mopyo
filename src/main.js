@@ -38,8 +38,8 @@ function render() {
 function renderIntro() {
   app.innerHTML = `<section class="screen intro">
     <div class="weather" aria-hidden="true"><i></i><i></i><i></i></div>
-    <div class="intro-copy"><p class="kicker">きょうの帰り道</p><h1>少しだけ、<br>道を外れてみる。</h1><p>夕方。待ち合わせには、少し遅れた。</p></div>
-    <button class="primary start" type="button">角を曲がる <span>→</span></button>
+    <div class="intro-copy"><p class="kicker">きょうは、ちょっと出かける。</p><h1>どこ行こう。</h1></div>
+    <button class="primary start" type="button">行く <span>→</span></button>
   </section>`;
   app.querySelector("button").addEventListener("click", () => setState({ phase: "story" }));
 }
@@ -50,7 +50,7 @@ function renderStory() {
     <header class="story-head"><button class="back" aria-label="ひとつ前へ">←</button><div class="progress" aria-label="${state.scene + 1} / ${scenes.length}"><span style="width:${((state.scene + 1) / scenes.length) * 100}%"></span></div><b>${String(state.scene + 1).padStart(2, "0")}</b></header>
     <div class="scene-art art-${state.scene}" aria-hidden="true"><div class="moon"></div><div class="door"></div><div class="object"></div></div>
     <article class="scene-copy"><p class="eyebrow">${scene.eyebrow}</p><h2>${scene.title}</h2><p>${scene.text}</p></article>
-    <div class="choices">${scene.choices.map((choice, index) => `<button type="button" data-choice="${index}"><span>${choice.label}</span><small>${choice.hint}</small></button>`).join("")}</div>
+    <div class="choices">${scene.choices.map((choice, index) => `<button type="button" data-choice="${index}"><span>${choice.label}</span>${choice.hint ? `<small>${choice.hint}</small>` : ""}</button>`).join("")}</div>
   </section>`;
   app.querySelector(".back").addEventListener("click", goBack);
   app.querySelectorAll("[data-choice]").forEach(button => button.addEventListener("click", () => choose(Number(button.dataset.choice))));
