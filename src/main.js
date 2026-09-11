@@ -48,7 +48,17 @@ function renderStory() {
   const scene = scenes[state.scene];
   app.innerHTML = `<section class="screen story">
     <header class="story-head"><button class="back" aria-label="ひとつ前へ">←</button><div class="progress" aria-label="${state.scene + 1} / ${scenes.length}"><span style="width:${((state.scene + 1) / scenes.length) * 100}%"></span></div><b>${String(state.scene + 1).padStart(2, "0")}</b></header>
-    <div class="scene-art art-${state.scene}" aria-hidden="true"><div class="moon"></div><div class="door"></div><div class="object"></div></div>
+    <div class="scene-art art-${state.scene}" aria-hidden="true">
+      <div class="sky-orb"></div>
+      <div class="city city-back"><i></i><i></i><i></i></div>
+      <div class="city city-front"><i></i><i></i><i></i><i></i></div>
+      <div class="station"><span>駅</span></div>
+      <div class="street-sign"><span></span></div>
+      <div class="utility-pole"><i></i><i></i></div>
+      <div class="city-door"><i></i></div>
+      <div class="ground-object"><i></i><i></i><i></i></div>
+      <div class="street"><i></i><i></i><i></i></div>
+    </div>
     <article class="scene-copy"><p class="eyebrow">${scene.eyebrow}</p><h2>${scene.title}</h2><p>${scene.text}</p></article>
     <div class="choices">${scene.choices.map((choice, index) => `<button type="button" data-choice="${index}"><span>${choice.label}</span>${choice.hint ? `<small>${choice.hint}</small>` : ""}</button>`).join("")}</div>
   </section>`;
