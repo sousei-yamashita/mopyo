@@ -23,7 +23,7 @@ button:focus-visible { outline: 3px solid #ff85ba; outline-offset: 3px; }
   padding: max(20px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
 }
 .kicker, .eyebrow {
   margin: 0 0 10px;
@@ -113,6 +113,7 @@ p { margin: 0; }
   color: #182050;
   background: linear-gradient(180deg, #e8f0ff 0%, #edf3ff 58%, #f6f0ff 100%);
   gap: 12px;
+  overflow-y: auto;
 }
 .story-head {
   height: 38px;
@@ -552,6 +553,7 @@ p { margin: 0; }
 .encounter {
   background: linear-gradient(180deg, #e6ecff 0%, #f5efff 100%);
   color: #202760;
+  overflow-y: auto;
 }
 .encounter header { text-align: center; }
 .encounter h2 { margin: 0 0 8px; font-size: 1.68rem; }
@@ -593,6 +595,7 @@ p { margin: 0; }
   background: linear-gradient(180deg, #edf2ff 0%, #f8f1ff 100%);
   color: #202760;
   padding-inline: 14px;
+  overflow-y: auto;
 }
 .result-head {
   padding: 8px 6px 14px;
@@ -702,13 +705,16 @@ p { margin: 0; }
 body[data-phase="story"] { background: linear-gradient(180deg, #cfddff 0%, #f3ebff 100%); }
 
 @media (max-height: 760px) {
+  .screen { padding-top: max(14px, env(safe-area-inset-top)); }
   .story { gap: 10px; }
-  .scene-map { min-height: 270px; }
+  .scene-map { min-height: 230px; }
   .scene-copy h2 { font-size: 1.28rem; }
   .scene-copy > p:last-child { font-size: .82rem; }
   .message-bubble { padding: 10px 12px; }
   .hotspot { min-height: 30px; padding: 7px 10px; font-size: .69rem; }
-  .scene-response { min-height: 74px; padding: 12px 14px; }
+  .scene-response { min-height: 64px; padding: 12px 14px; }
+  .scene-response p { min-height: 0; }
+  .small-creature { min-height: 170px; }
   .compact button { min-height: 62px; }
 }
 

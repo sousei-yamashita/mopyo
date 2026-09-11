@@ -4,12 +4,26 @@ const species = [
   { code: "MUGU", body: "wide", ears: "sprout", hue: 272 }
 ];
 
+const defaultMemories = [
+  "駅前で、少し長く立ち止まっていた。",
+  "落ちたものを、そのまま通り過ぎなかった。",
+  "帰る前に、もう一度だけ振り返った。"
+];
+
 export function initialState() {
   return { phase: "intro", scene: 0, answers: [], artifact: null, encounter: null, seed: randomSeed(), result: null, sceneStates: [] };
 }
 
 export function randomSeed() {
   return Math.floor(Math.random() * 0xffffff);
+}
+
+export function emptySceneStates(scenes) {
+  return Array.from({ length: scenes.length }, () => ({ counts: {}, note: "", active: "" }));
+}
+
+export function hasSceneInteractions(sceneStates) {
+  return sceneStates.some(sceneState => Object.keys(sceneState?.counts || {}).length > 0);
 }
 
 export function scoresFor(scenes, selections) {
@@ -87,9 +101,76 @@ export function artifactFor(scenes, sceneStates, fallback = "見ていたもの"
   return chosen?.label || fallback;
 }
 
+function formatDate(date) {
+  return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+function phenotypeFor(scores) {
+  return {
+    eyes: scores.approach > 1 ? "open" : "narrow",
+    posture: scores.tempo > 0 ? "forward" : "resting",
+    markings: Math.max(1, Math.min(4, Math.abs(scores.structure) + 1))
+  };
+}
+
+export function normalizeResult(result, state, scenes, date = new Date()) {
+  if (!result || typeof result !== "object") return makeResult(state, scenes, date);
+  const sceneStates = Array.isArray(state?.sceneStates) ? state.sceneStates : [];
+  const scores = result.scores || scoresFor(scenes, sceneStates);
+  const memories = Array.isArray(result.memories) && result.memories.length
+    ? result.memories
+    : Array.isArray(result.quirks) && result.quirks.length
+      ? result.quirks
+      : rememberedFor(scenes, sceneStates);
+  return {
+    ...result,
+    species: result.species || species[(state?.seed || 0) % species.length],
+    artifact: result.artifact || state?.artifact || artifactFor(scenes, sceneStates),
+    date: result.date || formatDate(date),
+    scores,
+    quirks: Array.isArray(result.quirks) && result.quirks.length ? result.quirks : memories,
+    memories: memories.length ? memories : defaultMemories,
+    phenotype: result.phenotype || phenotypeFor(scores)
+  };
+}
+
+export function normalizeJourneyState(saved, scenes) {
+  const source = saved && typeof saved === "object" ? saved : {};
+  const base = initialState();
+  const phases = new Set(["intro", "story", "pause", "reveal", "encounter", "card"]);
+  const sceneStates = emptySceneStates(scenes).map((sceneState, index) => ({
+    ...sceneState,
+    counts: typeof source?.sceneStates?.[index]?.counts === "object" && source.sceneStates[index].counts
+      ? source.sceneStates[index].counts
+      : {},
+    note: typeof source?.sceneStates?.[index]?.note === "string" ? source.sceneStates[index].note : "",
+    active: typeof source?.sceneStates?.[index]?.active === "string" ? source.sceneStates[index].active : ""
+  }));
+  const hasLegacyAnswers = Array.isArray(source.answers) && source.answers.length > 0;
+  const canResumePrototype = hasSceneInteractions(sceneStates);
+  const canShowLegacyResult = !!source.result;
+  const shouldResetLegacyProgress = hasLegacyAnswers && !canResumePrototype && !canShowLegacyResult;
+
+  return {
+    ...base,
+    ...source,
+    phase: shouldResetLegacyProgress
+      ? "intro"
+      : phases.has(source?.phase) ? source.phase : base.phase,
+    scene: shouldResetLegacyProgress
+      ? 0
+      : Number.isInteger(source?.scene) ? Math.max(0, Math.min(source.scene, scenes.length - 1)) : base.scene,
+    answers: shouldResetLegacyProgress ? [] : Array.isArray(source?.answers) ? source.answers : [],
+    artifact: typeof source?.artifact === "string" ? source.artifact : null,
+    encounter: typeof source?.encounter === "string" ? source.encounter : null,
+    result: source?.result ? normalizeResult(source.result, { ...source, sceneStates }, scenes) : null,
+    sceneStates
+  };
+}
+
 export function makeResult(state, scenes, date = new Date()) {
   const sceneStates = Array.isArray(state.sceneStates) ? state.sceneStates : [];
-  const scores = scoresFor(scenes, sceneStates.length ? sceneStates : state.answers);
+  const scores = scoresFor(scenes, sceneStates);
   const base = species[state.seed % species.length];
   const serial = state.seed.toString(36).toUpperCase().padStart(5, "0").slice(-5);
   const memories = rememberedFor(scenes, sceneStates);
@@ -97,18 +178,10 @@ export function makeResult(state, scenes, date = new Date()) {
     id: `${base.code}-${serial}`,
     species: base,
     artifact: state.artifact || artifactFor(scenes, sceneStates),
-    date: new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date),
+    date: formatDate(date),
     scores,
     quirks: memories,
-    memories: memories.length ? memories : [
-      "駅前で、少し長く立ち止まっていた。",
-      "落ちたものを、そのまま通り過ぎなかった。",
-      "帰る前に、もう一度だけ振り返った。"
-    ],
-    phenotype: {
-      eyes: scores.approach > 1 ? "open" : "narrow",
-      posture: scores.tempo > 0 ? "forward" : "resting",
-      markings: Math.max(1, Math.min(4, Math.abs(scores.structure) + 1))
-    }
+    memories: memories.length ? memories : defaultMemories,
+    phenotype: phenotypeFor(scores)
   };
 }

@@ -1,5 +1,5 @@
 import { scenes, encounterChoices } from "./story.js";
-import { initialState, makeResult, artifactFor } from "./engine.js";
+import { initialState, makeResult, artifactFor, normalizeJourneyState, normalizeResult } from "./engine.js";
 import { creatureSvg } from "./creature.js";
 
 const STORAGE_KEY = "mopyo-v01-journey";
@@ -9,34 +9,10 @@ let state = loadState();
 
 function loadState() {
   try {
-    return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)));
+    return normalizeJourneyState(JSON.parse(localStorage.getItem(STORAGE_KEY)), scenes);
   } catch {
-    return normalizeState();
+    return normalizeJourneyState(null, scenes);
   }
-}
-
-function normalizeState(saved = {}) {
-  const source = saved && typeof saved === "object" ? saved : {};
-  const base = initialState();
-  const phases = new Set(["intro", "story", "pause", "reveal", "encounter", "card"]);
-  const sceneStates = Array.from({ length: scenes.length }, (_, index) => ({
-    counts: typeof source?.sceneStates?.[index]?.counts === "object" && source.sceneStates[index].counts
-      ? source.sceneStates[index].counts
-      : {},
-    note: typeof source?.sceneStates?.[index]?.note === "string" ? source.sceneStates[index].note : "",
-    active: typeof source?.sceneStates?.[index]?.active === "string" ? source.sceneStates[index].active : ""
-  }));
-  return {
-    ...base,
-    ...source,
-    phase: phases.has(source?.phase) ? source.phase : base.phase,
-    scene: Number.isInteger(source?.scene) ? Math.max(0, Math.min(source.scene, scenes.length - 1)) : base.scene,
-    answers: Array.isArray(source?.answers) ? source.answers : [],
-    artifact: typeof source?.artifact === "string" ? source.artifact : null,
-    encounter: typeof source?.encounter === "string" ? source.encounter : null,
-    result: source?.result || null,
-    sceneStates
-  };
 }
 
 function save() {
@@ -44,7 +20,7 @@ function save() {
 }
 
 function setState(next) {
-  state = normalizeState({ ...state, ...next });
+  state = normalizeJourneyState({ ...state, ...next }, scenes);
   save();
   render();
   window.scrollTo({ top: 0, behavior: reducedMotion.matches ? "auto" : "smooth" });
@@ -62,6 +38,10 @@ function render() {
   else if (state.phase === "reveal") renderReveal();
   else if (state.phase === "encounter") renderEncounter();
   else renderCard();
+}
+
+function currentResult() {
+  return state.result ? normalizeResult(state.result, state, scenes) : makeResult(state, scenes);
 }
 
 function renderIntro() {
@@ -143,7 +123,7 @@ function inspectHotspot(id) {
 
 function advanceScene() {
   if (state.scene < scenes.length - 1) return setState({ scene: state.scene + 1, phase: "story" });
-  state = normalizeState({ ...state, phase: "pause" });
+  state = normalizeJourneyState({ ...state, phase: "pause" }, scenes);
   save();
   render();
 }
@@ -156,18 +136,21 @@ function renderPause() {
 }
 
 function renderReveal() {
-  if (!state.result) state.result = makeResult(state, scenes);
-  app.innerHTML = `<section class="screen reveal"><p class="eyebrow">FIRST SIGHT</p><div class="glow">${creatureSvg(state.result)}</div><div class="reveal-copy"><h2>……なんか、ついてきた。</h2><p>さっきまで、いなかったはず。</p></div><button class="primary" type="button">目を合わせる <span>→</span></button></section>`;
+  const result = currentResult();
+  if (state.result !== result) state.result = result;
+  app.innerHTML = `<section class="screen reveal"><p class="eyebrow">FIRST SIGHT</p><div class="glow">${creatureSvg(result)}</div><div class="reveal-copy"><h2>……なんか、ついてきた。</h2><p>さっきまで、いなかったはず。</p></div><button class="primary" type="button">目を合わせる <span>→</span></button></section>`;
   app.querySelector("button").addEventListener("click", () => setState({ phase: "encounter" }));
 }
 
 function renderEncounter() {
-  app.innerHTML = `<section class="screen encounter"><header><p class="eyebrow">FIRST ENCOUNTER</p><h2>こちらを見ている。</h2><p>説明はない。先に、こっちがどうするかだけある。</p></header><div class="small-creature">${creatureSvg(state.result)}</div><div class="choices compact">${encounterChoices.map((label, index) => `<button type="button" data-encounter="${index}"><span>${label}</span><b>→</b></button>`).join("")}</div></section>`;
+  const result = currentResult();
+  if (state.result !== result) state.result = result;
+  app.innerHTML = `<section class="screen encounter"><header><p class="eyebrow">FIRST ENCOUNTER</p><h2>こちらを見ている。</h2><p>説明はない。先に、こっちがどうするかだけある。</p></header><div class="small-creature">${creatureSvg(result)}</div><div class="choices compact">${encounterChoices.map((label, index) => `<button type="button" data-encounter="${index}"><span>${label}</span><b>→</b></button>`).join("")}</div></section>`;
   app.querySelectorAll("[data-encounter]").forEach(button => button.addEventListener("click", () => setState({ phase: "card", encounter: encounterChoices[Number(button.dataset.encounter)] }))); 
 }
 
 function renderCard() {
-  const result = state.result || makeResult(state, scenes);
+  const result = currentResult();
   const artifact = result.artifact || artifactFor(scenes, state.sceneStates, "見ていたもの");
   app.innerHTML = `<section class="screen result"><header class="result-head"><p class="eyebrow">FIRST ENCOUNTER</p><h1>ついてきた。</h1><p>診断じゃない。ただ、向こうが勝手に覚えている。</p></header>
     <article class="card">

@@ -87,7 +87,7 @@ export const scenes = [
     title: "前の人が、何か落とした。",
     text: "立ち止まらせる質問は出さない。目に入ったものから触る。",
     message: "小さいマスコットが、ころっと転がる。",
-    nextLabel: "角まで、少しだけ走る",
+    nextLabel: "もう少し先を見る",
     minInteractions: 3,
     hotspots: [
       {
