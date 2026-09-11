@@ -18,3 +18,10 @@ npm run dev
 npm test
 npm run build
 ```
+
+## PR Preview
+
+- `main` への push で GitHub Pages の本番用ルートを `gh-pages` ブランチへ更新します。
+- PR の `opened` / `synchronize` / `reopened` でレビュー用Previewを `previews/pr-<PR番号>/` に更新し、URLをPRコメントへ自動で残します。
+- PR を閉じると対応する Preview は削除されます。
+- 初回のみ、GitHub Pages の公開元を `gh-pages` ブランチの `/ (root)` に設定してください。

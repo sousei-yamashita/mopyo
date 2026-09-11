@@ -1,0 +1,270 @@
+name: Pages
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish_preview:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      PREVIEW_DIR: previews/pr-${{ github.event.pull_request.number }}
+      PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/pr-${{ github.event.pull_request.number }}/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Test
+        run: npm test
+
+      - name: Build check
+        run: npm run build
+
+      - name: Publish preview to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          BOOTSTRAP_DIR="$RUNNER_TEMP/bootstrap-root"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
+          cd "$PAGES_DIR"
+
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            git checkout gh-pages
+          else
+            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$BOOTSTRAP_DIR" --source="$PAGES_DIR"
+            git checkout --orphan gh-pages
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --source="$BOOTSTRAP_DIR" --preserve=previews
+          fi
+
+          mkdir -p "$(dirname "$PREVIEW_DIR")"
+          node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR/$PREVIEW_DIR"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No preview changes to publish."
+            exit 0
+          fi
+
+          git commit -m "Deploy preview for PR #${{ github.event.pull_request.number }}"
+          git push origin gh-pages
+
+      - name: Comment preview URL on pull request
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ env.PREVIEW_URL }}
+        with:
+          script: |
+            const marker = "<!-- mopyo-pages-preview -->";
+            const body = [
+              marker,
+              "🔍 Preview URL for this PR:",
+              "",
+              process.env.PREVIEW_URL,
+              "",
+              "- 最新のPR headへ自動更新されます。",
+              "- このPreviewはレビュー専用で、本番公開ではありません。",
+              "- PRを閉じるとPreviewも削除されます。"
+            ].join("\n");
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const existing = comments.find(comment =>
+              comment.user?.login === "github-actions[bot]" &&
+              comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
+
+  cleanup_preview:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      PREVIEW_DIR: previews/pr-${{ github.event.pull_request.number }}
+      PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/pr-${{ github.event.pull_request.number }}/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove preview from gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
+          cd "$PAGES_DIR"
+
+          if ! git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            echo "gh-pages does not exist yet."
+            exit 0
+          fi
+
+          git checkout gh-pages
+          rm -rf "$PREVIEW_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No preview changes to clean up."
+            exit 0
+          fi
+
+          git commit -m "Remove preview for PR #${{ github.event.pull_request.number }}"
+          git push origin gh-pages
+
+      - name: Update pull request comment after cleanup
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ env.PREVIEW_URL }}
+        with:
+          script: |
+            const marker = "<!-- mopyo-pages-preview -->";
+            const body = [
+              marker,
+              "🧹 Preview closed for this PR.",
+              "",
+              process.env.PREVIEW_URL,
+              "",
+              "- PRが閉じられたため、レビュー用Previewは削除されました。",
+              "- 本番URLには影響しません。"
+            ].join("\n");
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const existing = comments.find(comment =>
+              comment.user?.login === "github-actions[bot]" &&
+              comment.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body
+              });
+            }
+
+  publish_production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Test
+        run: npm test
+
+      - name: Build check
+        run: npm run build
+
+      - name: Publish production site to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
+          cd "$PAGES_DIR"
+
+          if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+
+          node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --preserve=previews
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No production changes to publish."
+            exit 0
+          fi
+
+          git commit -m "Deploy production site from main"
+          git push origin gh-pages
