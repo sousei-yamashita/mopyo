@@ -8,7 +8,22 @@ test("pages workflow serializes every gh-pages writer", () => {
   assert.match(workflow, /concurrency:\n  group: gh-pages-writes\n  cancel-in-progress: false/);
 });
 
-test("every writer run uses the reconcile script so a later run can rebuild preview state", () => {
-  assert.match(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/reconcile-pages\.js" preview "\$PAGES_DIR"/);
-  assert.match(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/reconcile-pages\.js" production "\$PAGES_DIR"/);
+test("pages workflow reconciles previews from open non-draft same-repository PRs", () => {
+  assert.match(workflow, /pull\.draft === false/);
+  assert.match(workflow, /pull\.head\?\.repo\?\.full_name === repository/);
+});
+
+test("privileged pages jobs do not execute repository scripts from the PR branch", () => {
+  assert.doesNotMatch(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/reconcile-pages\.js"/);
+  assert.doesNotMatch(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/export-site\.js"/);
+  assert.match(workflow, /git archive FETCH_HEAD index\.html src \| tar -x -C "\$SOURCE_DIR"/);
+});
+
+test("write permissions stay scoped to the pages publishing jobs", () => {
+  assert.equal((workflow.match(/contents: write/g) || []).length, 3);
+  assert.equal((workflow.match(/pull-requests: write/g) || []).length, 2);
+});
+
+test("preview-side write jobs do not check out PR branch code", () => {
+  assert.equal((workflow.match(/actions\/checkout@v4/g) || []).length, 1);
 });

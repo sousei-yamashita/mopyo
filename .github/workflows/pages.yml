@@ -29,27 +29,38 @@ jobs:
     env:
       PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/pr-${{ github.event.pull_request.number }}/
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Collect reviewable PR numbers
+        id: reviewable_prs
+        uses: actions/github-script@v7
         with:
-          node-version: '20'
+          result-encoding: string
+          script: |
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100
+            });
 
-      - name: Test
-        run: npm test
-
-      - name: Build check
-        run: npm run build
+            return JSON.stringify(
+              pulls
+                .filter(pull => pull.state === "open" && pull.draft === false && pull.head?.repo?.full_name === repository)
+                .map(pull => pull.number)
+                .sort((a, b) => a - b)
+            );
 
       - name: Reconcile previews on gh-pages
         env:
           GH_TOKEN: ${{ github.token }}
+          MAIN_PUBLISH_MARKER: .pages-root-from-main
+          REVIEWABLE_PRS: ${{ steps.reviewable_prs.outputs.result }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          STAGING_DIR="$RUNNER_TEMP/preview-sources"
+          export PAGES_DIR REVIEWABLE_PRS STAGING_DIR
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
           cd "$PAGES_DIR"
 
@@ -60,7 +71,39 @@ jobs:
             find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
 
-          node "$GITHUB_WORKSPACE/scripts/reconcile-pages.js" preview "$PAGES_DIR"
+          if [ ! -f "$MAIN_PUBLISH_MARKER" ]; then
+            find . -mindepth 1 -maxdepth 1 ! -name .git ! -name previews -exec rm -rf {} +
+            : > .nojekyll
+          fi
+
+          mkdir -p previews "$STAGING_DIR"
+          python3 - <<'PY'
+          import json, os, pathlib, shutil
+          previews_dir = pathlib.Path(os.environ["PAGES_DIR"]) / "previews"
+          previews_dir.mkdir(exist_ok=True)
+          desired = {f"pr-{number}" for number in json.loads(os.environ.get("REVIEWABLE_PRS") or "[]")}
+
+          for child in previews_dir.iterdir():
+            if child.is_dir() and child.name.startswith("pr-") and child.name not in desired:
+              shutil.rmtree(child)
+          PY
+
+          for pr in $(python3 - <<'PY'
+          import json, os
+          for number in json.loads(os.environ.get("REVIEWABLE_PRS") or "[]"):
+            print(number)
+          PY
+          ); do
+            SOURCE_DIR="$STAGING_DIR/pr-$pr"
+            TARGET_DIR="$PAGES_DIR/previews/pr-$pr"
+            rm -rf "$SOURCE_DIR" "$TARGET_DIR"
+            mkdir -p "$SOURCE_DIR" "$TARGET_DIR"
+            git fetch --depth=1 origin "refs/pull/$pr/head"
+            git archive FETCH_HEAD index.html src | tar -x -C "$SOURCE_DIR"
+            cp "$SOURCE_DIR/index.html" "$TARGET_DIR/index.html"
+            cp -R "$SOURCE_DIR/src" "$TARGET_DIR/src"
+            : > "$TARGET_DIR/.nojekyll"
+          done
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -130,24 +173,40 @@ jobs:
       contents: write
       pull-requests: write
     env:
-      PREVIEW_DIR: previews/pr-${{ github.event.pull_request.number }}
       PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/pr-${{ github.event.pull_request.number }}/
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Collect reviewable PR numbers
+        id: reviewable_prs
+        uses: actions/github-script@v7
         with:
-          node-version: '20'
+          result-encoding: string
+          script: |
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100
+            });
+
+            return JSON.stringify(
+              pulls
+                .filter(pull => pull.state === "open" && pull.draft === false && pull.head?.repo?.full_name === repository)
+                .map(pull => pull.number)
+                .sort((a, b) => a - b)
+            );
 
       - name: Reconcile previews after PR close
         env:
           GH_TOKEN: ${{ github.token }}
+          MAIN_PUBLISH_MARKER: .pages-root-from-main
+          REVIEWABLE_PRS: ${{ steps.reviewable_prs.outputs.result }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          STAGING_DIR="$RUNNER_TEMP/preview-sources"
+          export PAGES_DIR REVIEWABLE_PRS STAGING_DIR
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
           cd "$PAGES_DIR"
 
@@ -157,7 +216,40 @@ jobs:
           fi
 
           git checkout gh-pages
-          node "$GITHUB_WORKSPACE/scripts/reconcile-pages.js" preview "$PAGES_DIR"
+
+          if [ ! -f "$MAIN_PUBLISH_MARKER" ]; then
+            find . -mindepth 1 -maxdepth 1 ! -name .git ! -name previews -exec rm -rf {} +
+            : > .nojekyll
+          fi
+
+          mkdir -p previews "$STAGING_DIR"
+          python3 - <<'PY'
+          import json, os, pathlib, shutil
+          previews_dir = pathlib.Path(os.environ["PAGES_DIR"]) / "previews"
+          previews_dir.mkdir(exist_ok=True)
+          desired = {f"pr-{number}" for number in json.loads(os.environ.get("REVIEWABLE_PRS") or "[]")}
+
+          for child in previews_dir.iterdir():
+            if child.is_dir() and child.name.startswith("pr-") and child.name not in desired:
+              shutil.rmtree(child)
+          PY
+
+          for pr in $(python3 - <<'PY'
+          import json, os
+          for number in json.loads(os.environ.get("REVIEWABLE_PRS") or "[]"):
+            print(number)
+          PY
+          ); do
+            SOURCE_DIR="$STAGING_DIR/pr-$pr"
+            TARGET_DIR="$PAGES_DIR/previews/pr-$pr"
+            rm -rf "$SOURCE_DIR" "$TARGET_DIR"
+            mkdir -p "$SOURCE_DIR" "$TARGET_DIR"
+            git fetch --depth=1 origin "refs/pull/$pr/head"
+            git archive FETCH_HEAD index.html src | tar -x -C "$SOURCE_DIR"
+            cp "$SOURCE_DIR/index.html" "$TARGET_DIR/index.html"
+            cp -R "$SOURCE_DIR/src" "$TARGET_DIR/src"
+            : > "$TARGET_DIR/.nojekyll"
+          done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -227,24 +319,38 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Collect reviewable PR numbers
+        id: reviewable_prs
+        uses: actions/github-script@v7
         with:
-          node-version: '20'
+          result-encoding: string
+          script: |
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100
+            });
 
-      - name: Test
-        run: npm test
-
-      - name: Build check
-        run: npm run build
+            return JSON.stringify(
+              pulls
+                .filter(pull => pull.state === "open" && pull.draft === false && pull.head?.repo?.full_name === repository)
+                .map(pull => pull.number)
+                .sort((a, b) => a - b)
+            );
 
       - name: Publish production site to gh-pages
         env:
           GH_TOKEN: ${{ github.token }}
+          MAIN_PUBLISH_MARKER: .pages-root-from-main
+          REVIEWABLE_PRS: ${{ steps.reviewable_prs.outputs.result }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           PAGES_DIR="$RUNNER_TEMP/gh-pages"
+          STAGING_DIR="$RUNNER_TEMP/preview-sources"
+          export GITHUB_WORKSPACE MAIN_PUBLISH_MARKER PAGES_DIR REVIEWABLE_PRS STAGING_DIR
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
           cd "$PAGES_DIR"
 
@@ -255,7 +361,40 @@ jobs:
             find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
 
-          node "$GITHUB_WORKSPACE/scripts/reconcile-pages.js" production "$PAGES_DIR"
+          find . -mindepth 1 -maxdepth 1 ! -name .git ! -name previews -exec rm -rf {} +
+          cp "$GITHUB_WORKSPACE/index.html" "$PAGES_DIR/index.html"
+          cp -R "$GITHUB_WORKSPACE/src" "$PAGES_DIR/src"
+          : > "$PAGES_DIR/.nojekyll"
+          printf 'published-from-main\n' > "$PAGES_DIR/$MAIN_PUBLISH_MARKER"
+
+          mkdir -p previews "$STAGING_DIR"
+          python3 - <<'PY'
+          import json, os, pathlib, shutil
+          previews_dir = pathlib.Path(os.environ["PAGES_DIR"]) / "previews"
+          previews_dir.mkdir(exist_ok=True)
+          desired = {f"pr-{number}" for number in json.loads(os.environ.get("REVIEWABLE_PRS") or "[]")}
+
+          for child in previews_dir.iterdir():
+            if child.is_dir() and child.name.startswith("pr-") and child.name not in desired:
+              shutil.rmtree(child)
+          PY
+
+          for pr in $(python3 - <<'PY'
+          import json, os
+          for number in json.loads(os.environ.get("REVIEWABLE_PRS") or "[]"):
+            print(number)
+          PY
+          ); do
+            SOURCE_DIR="$STAGING_DIR/pr-$pr"
+            TARGET_DIR="$PAGES_DIR/previews/pr-$pr"
+            rm -rf "$SOURCE_DIR" "$TARGET_DIR"
+            mkdir -p "$SOURCE_DIR" "$TARGET_DIR"
+            git fetch --depth=1 origin "refs/pull/$pr/head"
+            git archive FETCH_HEAD index.html src | tar -x -C "$SOURCE_DIR"
+            cp "$SOURCE_DIR/index.html" "$TARGET_DIR/index.html"
+            cp -R "$SOURCE_DIR/src" "$TARGET_DIR/src"
+            : > "$TARGET_DIR/.nojekyll"
+          done
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
