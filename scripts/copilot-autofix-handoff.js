@@ -83,7 +83,11 @@ export function decideAutofixAction({
   }
 
   if (state.attemptCount >= maxAttempts) {
-    return { kind: "limit-reached", shouldCreateStop: true, attemptCount: state.attemptCount };
+    return {
+      kind: "limit-reached",
+      shouldCreateStop: !state.hasStopForHead,
+      attemptCount: state.attemptCount
+    };
   }
 
   const nextAttempt = state.attemptCount + 1;
