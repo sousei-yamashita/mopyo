@@ -1,40 +1,79 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { scenes } from "../src/story.js";
-import { scoresFor, makeResult } from "../src/engine.js";
+import { scoresFor, rememberedFor, artifactFor, makeResult } from "../src/engine.js";
 
-test("six scenes form a complete journey with three to five concrete choices", () => {
-  assert.equal(scenes.length, 6);
-  scenes.forEach(scene => assert.ok(scene.choices.length >= 3 && scene.choices.length <= 5));
-  assert.equal(scenes.filter(scene => scene.identity).length, 1);
+test("three prototype scenes offer multiple tappable hotspots", () => {
+  assert.equal(scenes.length, 3);
+  scenes.forEach(scene => {
+    assert.ok(scene.hotspots.length >= 5);
+    assert.ok(scene.minInteractions >= 3);
+    assert.equal(typeof scene.nextLabel, "string");
+  });
 });
 
-test("the final scene offers the specified immediate actions", () => {
-  assert.equal(scenes[5].title, "後ろから音がする。");
-  assert.equal(scenes[5].text, "止まると、音も止まる。");
-  assert.deepEqual(scenes[5].choices.map(choice => choice.label), [
-    "振り返る", "待つ", "走る", "気にせず歩く", "隠れる"
+test("scene 1 preserves the expected repeat gacha responses", () => {
+  const gacha = scenes[0].hotspots.find(hotspot => hotspot.id === "gacha");
+  assert.deepEqual(gacha.reactions, [
+    "知らないキャラだ。",
+    "ちょっとかわいい。",
+    "……300円か。"
   ]);
 });
 
-test("scores accumulate from multiple scenes", () => {
-  const scores = scoresFor(scenes, [0, 0, 1, 0, 2, 0]);
-  assert.equal(scores.approach, 6);
-  assert.equal(scores.structure, 1);
+test("scores accumulate from repeated direct interactions", () => {
+  const scores = scoresFor(scenes, [
+    { counts: { gacha: 2, alley: 1 } },
+    { counts: { mascot: 2, run: 1 } },
+    { counts: { 'below-machine': 1, bottle: 1 } }
+  ]);
+  assert.equal(scores.approach, 3);
+  assert.equal(scores.retention, 7);
 });
 
-test("result is deterministic for the same seed and answers", () => {
-  const state = { seed: 42, answers: [0, 1, 2, 0, 1, 2], artifact: "鳴らない鈴" };
+test("remembered actions come from concrete observed behavior", () => {
+  const remembered = rememberedFor(scenes, [
+    { counts: { gacha: 2 } },
+    { counts: { mascot: 2, stain: 1 } },
+    { counts: { 'below-machine': 1 } }
+  ]);
+  assert.deepEqual(remembered, [
+    "ガチャを二回見た。",
+    "あのマスコット、二回見てた。",
+    "自販機の下まで覗いた。"
+  ]);
+});
+
+test("artifact is derived from what the user actually handled", () => {
+  assert.equal(artifactFor(scenes, [
+    { counts: { gacha: 1 } },
+    { counts: { mascot: 1 } },
+    { counts: { bottle: 1 } }
+  ]), "もちもちのマスコット");
+  assert.equal(artifactFor(scenes, [
+    { counts: {} },
+    { counts: {} },
+    { counts: { 'below-machine': 2 } }
+  ]), "返ってきた100円");
+});
+
+test("result is deterministic for the same seed and remembered actions", () => {
+  const state = {
+    seed: 42,
+    artifact: null,
+    answers: [],
+    sceneStates: [
+      { counts: { gacha: 2, alley: 1 } },
+      { counts: { mascot: 2, run: 1 } },
+      { counts: { 'below-machine': 1, bottle: 1 } }
+    ]
+  };
   const date = new Date("2026-09-10T12:00:00Z");
   assert.deepEqual(makeResult(state, scenes, date), makeResult(state, scenes, date));
   assert.match(makeResult(state, scenes, date).id, /^NEMU-/);
-});
-
-test("artifact is preserved as an identity event", () => {
-  assert.deepEqual(scenes[4].choices.map(choice => choice.artifact), [
-    "歯のない鍵", "鳴らない鈴", "穴のあいた石"
+  assert.deepEqual(makeResult(state, scenes, date).memories, [
+    "ガチャを二回見た。",
+    "あのマスコット、二回見てた。",
+    "自販機の下まで覗いた。"
   ]);
-  const result = makeResult({ seed: 1, answers: [0, 0, 0, 0, 2, 0], artifact: "穴のあいた石" }, scenes, new Date("2026-01-01"));
-  assert.equal(result.artifact, "穴のあいた石");
-  assert.equal(result.quirks.length, 3);
 });
