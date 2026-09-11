@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: gh-pages-writes
+  cancel-in-progress: false
 
 jobs:
   publish_preview:
@@ -51,17 +51,15 @@ jobs:
         run: |
           set -euo pipefail
           PAGES_DIR="$RUNNER_TEMP/gh-pages"
-          BOOTSTRAP_DIR="$RUNNER_TEMP/bootstrap-root"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" "$PAGES_DIR"
           cd "$PAGES_DIR"
 
           if git show-ref --verify --quiet refs/remotes/origin/gh-pages; then
             git checkout gh-pages
           else
-            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$BOOTSTRAP_DIR" --source="$PAGES_DIR"
             git checkout --orphan gh-pages
             find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --source="$BOOTSTRAP_DIR" --preserve=previews
+            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --root-only
           fi
 
           mkdir -p "$(dirname "$PREVIEW_DIR")"

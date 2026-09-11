@@ -22,6 +22,8 @@ npm run build
 ## PR Preview
 
 - `main` への push で GitHub Pages の本番用ルートを `gh-pages` ブランチへ更新します。
-- PR の `opened` / `synchronize` / `reopened` でレビュー用Previewを `previews/pr-<PR番号>/` に更新し、URLをPRコメントへ自動で残します。
+- PR の `opened` / `synchronize` / `reopened` でレビュー用Previewを `previews/pr-<PR番号>/` に更新し、URLをPRコメントへ自動で残します。`gh-pages` 未作成時もPRイベントでは本番ルートを作らず、ルートには `.nojekyll` だけを置きます。
 - PR を閉じると対応する Preview は削除されます。
+- `gh-pages` への書き込みはPreview更新・cleanup・`main`公開をすべて同じ workflow concurrency group で直列化し、進行中jobの取消しもしません。
+- Preview URL は本番と同じ origin (`https://sousei-yamashita.github.io`) 配下ですが、Preview では `localStorage` を使わず `sessionStorage` の同じ key (`mopyo-v01-journey`) だけを使います。そのため本番保存データは読み書きされず、Previewの進行は同じタブの再読み込みまで保持され、タブを閉じると消えます。
 - 初回のみ、GitHub Pages の公開元を `gh-pages` ブランチの `/ (root)` に設定してください。

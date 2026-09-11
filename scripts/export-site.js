@@ -5,11 +5,10 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appEntries = ["index.html", "src"];
 
-export async function exportSite(destination, { preserve = [], source = repoRoot } = {}) {
+export async function initializePagesSite(destination, { preserve = [] } = {}) {
   if (!destination) throw new Error("Destination path is required.");
 
   const outputDir = resolve(destination);
-  const sourceDir = resolve(source);
   const preserved = new Set([".git", ...preserve]);
   await mkdir(outputDir, { recursive: true });
 
@@ -18,17 +17,23 @@ export async function exportSite(destination, { preserve = [], source = repoRoot
     await rm(join(outputDir, entry), { recursive: true, force: true });
   }
 
-  await Promise.all(appEntries.map(entry => cp(join(sourceDir, entry), join(outputDir, entry), { recursive: true })));
   await writeFile(join(outputDir, ".nojekyll"), "");
+  return outputDir;
+}
+
+export async function exportSite(destination, { preserve = [] } = {}) {
+  const outputDir = await initializePagesSite(destination, { preserve });
+
+  await Promise.all(appEntries.map(entry => cp(join(repoRoot, entry), join(outputDir, entry), { recursive: true })));
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const preserveArg = process.argv.find(argument => argument.startsWith("--preserve="));
-  const sourceArg = process.argv.find(argument => argument.startsWith("--source="));
+  const rootOnly = process.argv.includes("--root-only");
   const preserve = preserveArg ? preserveArg.slice("--preserve=".length).split(",").filter(Boolean) : [];
-  const source = sourceArg ? sourceArg.slice("--source=".length) : repoRoot;
 
-  exportSite(process.argv[2], { preserve, source }).catch(error => {
+  const action = rootOnly ? initializePagesSite : exportSite;
+  action(process.argv[2], { preserve }).catch(error => {
     console.error(error.message);
     process.exitCode = 1;
   });

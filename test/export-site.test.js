@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exportSite } from "../scripts/export-site.js";
+import { exportSite, initializePagesSite } from "../scripts/export-site.js";
 
 test("exportSite copies the static app and removes stale files", async () => {
   const root = await mkdtemp(join(tmpdir(), "mopyo-export-site-"));
@@ -38,16 +38,16 @@ test("exportSite preserves requested directories when refreshing a Pages checkou
   await assert.doesNotReject(readFile(join(destination, "src", "style.css"), "utf8"));
 });
 
-test("exportSite can copy from an alternate source directory", async () => {
-  const root = await mkdtemp(join(tmpdir(), "mopyo-export-site-source-"));
-  const source = join(root, "source");
-  const destination = join(root, "preview");
-  await mkdir(join(source, "src"), { recursive: true });
-  await writeFile(join(source, "index.html"), "<!doctype html><title>preview</title>");
-  await writeFile(join(source, "src", "main.js"), "console.log('preview');");
+test("initializePagesSite leaves preview bootstrap at root .nojekyll only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mopyo-pages-root-"));
+  const destination = join(root, "gh-pages");
+  await mkdir(join(destination, "old"), { recursive: true });
+  await writeFile(join(destination, "old", "stale.txt"), "old");
 
-  await exportSite(destination, { source });
+  await initializePagesSite(destination);
 
-  assert.equal(await readFile(join(destination, "index.html"), "utf8"), "<!doctype html><title>preview</title>");
-  assert.equal(await readFile(join(destination, "src", "main.js"), "utf8"), "console.log('preview');");
+  await assert.doesNotReject(readFile(join(destination, ".nojekyll"), "utf8"));
+  await assert.rejects(access(join(destination, "index.html")));
+  await assert.rejects(access(join(destination, "src")));
+  await assert.rejects(access(join(destination, "old", "stale.txt")));
 });
