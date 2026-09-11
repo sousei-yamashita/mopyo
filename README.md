@@ -21,10 +21,11 @@ npm run build
 
 ## PR Preview
 
-- `main` への push で GitHub Pages の本番用ルートを `gh-pages` ブランチへ更新します。
-- PR の `opened` / `synchronize` / `reopened` でレビュー用Previewを `previews/pr-<PR番号>/` に更新し、URLをPRコメントへ自動で残します。`gh-pages` 未作成時もPRイベントでは本番ルートを作らず、ルートには `.nojekyll` だけを置きます。`main` からの本番公開がまだ一度も行われていない間は、PR更新ごとにルートを `.nojekyll` のみに戻してから Preview だけを更新します。
-- PR を閉じると対応する Preview は削除されます。
-- `gh-pages` への書き込みはPreview更新・cleanup・`main`公開をすべて同じ workflow concurrency group で直列化し、進行中jobの取消しもしません。各writerは毎回「同一repositoryで現在openかつ非draftのPR一覧」を見て preview 群全体を再構築するため、pending の cleanup / publish が後続runに置換されても最新runで状態が収束します。
-- 権限付きのPages更新jobでは、このrepository内の信頼済みworkflow手順だけを実行し、PR headからは `index.html` と `src/` を `git archive` で取得してPreview入力に使います。PR側の `scripts/*.js` は公開処理として実行しません。
+- GitHub Pages の公開は branch push ではなく、GitHub 公式の `actions/upload-pages-artifact` / `actions/deploy-pages` を使う custom workflow で行います。
+- PR側のCIは read-only のままです。Pages への公開とPRコメント更新は、successful CI の後に default branch 側の trusted workflow 定義からだけ実行します。
+- `main` の successful CI 後に本番ルートを更新し、レビュー可能なPRの successful CI 後に `previews/pr-<PR番号>/` を更新します。`gh-pages` は公開状態の再構築用stateとして保持します。
+- PR を閉じるか draft に戻すと対応する Preview は削除されます。
+- Preview集合は毎回「同一repositoryで現在openかつ非draftのPR一覧」から再構築するため、pending の cleanup / publish が後続runに置換されても最新runで状態が収束します。
+- 権限付きの公開処理は PR head の workflow / script を実行せず、trusted workflow から `index.html` と `src/` だけを `git archive` で取得して Pages artifact を作成します。
 - Preview URL は本番と同じ origin (`https://sousei-yamashita.github.io`) 配下ですが、Preview では `localStorage` を使わず `sessionStorage` の同じ key (`mopyo-v01-journey`) だけを使います。そのため本番保存データは読み書きされず、Previewの進行は同じタブの再読み込みまで保持され、タブを閉じると消えます。
-- 初回のみ、GitHub Pages の公開元を `gh-pages` ブランチの `/ (root)` に設定してください。
+- 初回のみ、GitHub Pages の公開元を GitHub Actions に設定してください。

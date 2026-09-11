@@ -3,9 +3,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const workflow = await readFile(new URL("../.github/workflows/pages.yml", import.meta.url), "utf8");
+const reconcileScript = await readFile(new URL("../scripts/reconcile-pages.js", import.meta.url), "utf8");
 
 test("pages workflow serializes every gh-pages writer", () => {
   assert.match(workflow, /concurrency:\n  group: gh-pages-writes\n  cancel-in-progress: false/);
+});
+
+test("pages workflow uses trusted triggers instead of direct pull_request publishing", () => {
+  assert.match(workflow, /workflow_run:/);
+  assert.match(workflow, /pull_request_target:/);
+  assert.doesNotMatch(workflow, /\non:\n[\s\S]*pull_request:/);
 });
 
 test("pages workflow reconciles previews from open non-draft same-repository PRs", () => {
@@ -13,17 +20,29 @@ test("pages workflow reconciles previews from open non-draft same-repository PRs
   assert.match(workflow, /pull\.head\?\.repo\?\.full_name === repository/);
 });
 
-test("privileged pages jobs do not execute repository scripts from the PR branch", () => {
-  assert.doesNotMatch(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/reconcile-pages\.js"/);
-  assert.doesNotMatch(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/export-site\.js"/);
-  assert.match(workflow, /git archive FETCH_HEAD index\.html src \| tar -x -C "\$SOURCE_DIR"/);
+test("privileged pages workflow checks out the default branch before running trusted scripts", () => {
+  assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+  assert.match(workflow, /node scripts\/reconcile-pages\.js --mode production/);
+  assert.match(workflow, /node scripts\/reconcile-pages\.js --mode preview/);
+});
+
+test("pages workflow publishes through official GitHub Pages artifact deployment", () => {
+  assert.match(workflow, /actions\/configure-pages@v5/);
+  assert.match(workflow, /actions\/upload-pages-artifact@v4/);
+  assert.match(workflow, /actions\/deploy-pages@v4/);
+});
+
+test("trusted Pages reconciliation takes only static app files from PR heads", () => {
+  assert.match(reconcileScript, /git", \["-C", workspace, "archive", "FETCH_HEAD", "index\.html", "src"\]/);
 });
 
 test("write permissions stay scoped to the pages publishing jobs", () => {
-  assert.equal((workflow.match(/contents: write/g) || []).length, 3);
-  assert.equal((workflow.match(/pull-requests: write/g) || []).length, 2);
+  assert.equal((workflow.match(/contents: write/g) || []).length, 1);
+  assert.equal((workflow.match(/pages: write/g) || []).length, 1);
+  assert.equal((workflow.match(/id-token: write/g) || []).length, 1);
+  assert.equal((workflow.match(/pull-requests: write/g) || []).length, 1);
 });
 
-test("preview-side write jobs do not check out PR branch code", () => {
-  assert.equal((workflow.match(/actions\/checkout@v4/g) || []).length, 1);
+test("Pages state branch updates stay inside the trusted prepare job", () => {
+  assert.match(workflow, /git push origin gh-pages/);
 });
