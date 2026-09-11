@@ -46,3 +46,9 @@ test("write permissions stay scoped to the pages publishing jobs", () => {
 test("Pages state branch updates stay inside the trusted prepare job", () => {
   assert.match(workflow, /git push origin gh-pages/);
 });
+
+test("uploaded Pages artifact excludes git metadata while keeping hidden files support", () => {
+  assert.match(workflow, /Remove git metadata from Pages artifact/);
+  assert.match(workflow, /rm -rf "\$\{\{ runner\.temp \}\}\/pages-site\/\.git"/);
+  assert.match(workflow, /include-hidden-files: true/);
+});

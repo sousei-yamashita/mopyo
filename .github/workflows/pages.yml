@@ -126,6 +126,9 @@ jobs:
             git push origin gh-pages
           fi
 
+      - name: Remove git metadata from Pages artifact
+        run: rm -rf "${{ runner.temp }}/pages-site/.git"
+
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v4
         with:
