@@ -27,6 +27,7 @@ jobs:
       contents: write
       pull-requests: write
     env:
+      MAIN_PUBLISH_MARKER: .pages-root-from-main
       PREVIEW_DIR: previews/pr-${{ github.event.pull_request.number }}
       PREVIEW_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/previews/pr-${{ github.event.pull_request.number }}/
     steps:
@@ -59,7 +60,10 @@ jobs:
           else
             git checkout --orphan gh-pages
             find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --root-only
+          fi
+
+          if [ ! -f "$MAIN_PUBLISH_MARKER" ]; then
+            node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --root-only --preserve=previews
           fi
 
           mkdir -p "$(dirname "$PREVIEW_DIR")"
@@ -239,6 +243,7 @@ jobs:
       - name: Publish production site to gh-pages
         env:
           GH_TOKEN: ${{ github.token }}
+          MAIN_PUBLISH_MARKER: .pages-root-from-main
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -254,6 +259,7 @@ jobs:
           fi
 
           node "$GITHUB_WORKSPACE/scripts/export-site.js" "$PAGES_DIR" --preserve=previews
+          printf 'published-from-main\n' > "$PAGES_DIR/$MAIN_PUBLISH_MARKER"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -9,6 +9,10 @@ test("pages workflow serializes every gh-pages writer", () => {
 });
 
 test("preview bootstrap initializes only the pages root marker before exporting the preview path", () => {
-  assert.match(workflow, /node "\$GITHUB_WORKSPACE\/scripts\/export-site\.js" "\$PAGES_DIR" --root-only/);
-  assert.doesNotMatch(workflow, /BOOTSTRAP_DIR/);
+  assert.match(workflow, /MAIN_PUBLISH_MARKER: \.pages-root-from-main/);
+  assert.match(workflow, /if \[ ! -f "\$MAIN_PUBLISH_MARKER" \]; then\n            node "\$GITHUB_WORKSPACE\/scripts\/export-site\.js" "\$PAGES_DIR" --root-only --preserve=previews\n          fi/);
+});
+
+test("production publish marks that the Pages root now belongs to main", () => {
+  assert.match(workflow, /printf 'published-from-main\\n' > "\$PAGES_DIR\/\$MAIN_PUBLISH_MARKER"/);
 });
