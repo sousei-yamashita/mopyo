@@ -11,6 +11,10 @@ permissions:
   pull-requests: read
   issues: write
 
+concurrency:
+  group: ci-gate-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
 jobs:
   gate:
     runs-on: ubuntu-latest
@@ -30,4 +34,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_GATE_NOTIFY_LOGIN: sousei-yamashita
         run: node scripts/ci-gate.js
