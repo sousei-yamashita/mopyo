@@ -127,25 +127,30 @@ test("counts attempts across head changes and stops on the third handoff", () =>
 
 test("limit reached posts stop exactly once and future runs skip", () => {
   const review = { id: 204, state: "changes_requested", body: "### 🟡 Changes recommended" };
-  const comments = [
+  const legacyCommentsWithoutStop = [
     buildTrustedHandoffComment({ reviewId: 201, currentHeadSha: headSha, attempt: 1 }),
     buildTrustedHandoffComment({ reviewId: 202, currentHeadSha: nextHeadSha, attempt: 2 }),
-    buildTrustedHandoffComment({ reviewId: 203, currentHeadSha: headSha, attempt: 3, includeStop: true })
+    buildTrustedHandoffComment({ reviewId: 203, currentHeadSha: headSha, attempt: 3, includeStop: false })
   ];
   const limitDecision = decideAutofixAction({
     review,
     reviewSpecificComments: [],
-    issueComments: comments,
+    issueComments: legacyCommentsWithoutStop,
     headSha: nextHeadSha,
     maxAttempts: 3,
     trustedAuthorLogin
   });
   assert.deepEqual(limitDecision, { kind: "limit-reached", shouldCreateStop: true, attemptCount: 3 });
 
+  const commentsWithStop = [
+    buildTrustedHandoffComment({ reviewId: 201, currentHeadSha: headSha, attempt: 1 }),
+    buildTrustedHandoffComment({ reviewId: 202, currentHeadSha: nextHeadSha, attempt: 2 }),
+    buildTrustedHandoffComment({ reviewId: 203, currentHeadSha: headSha, attempt: 3, includeStop: true })
+  ];
   const postStopDecision = decideAutofixAction({
     review,
     reviewSpecificComments: [],
-    issueComments: comments,
+    issueComments: commentsWithStop,
     headSha: nextHeadSha,
     maxAttempts: 3,
     trustedAuthorLogin
