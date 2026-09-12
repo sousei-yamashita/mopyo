@@ -36,6 +36,19 @@ export function isTrustedComment(comment) {
 }
 
 /**
+ * Only the current, open, reviewable PR revision may receive a Gate comment.
+ */
+export function isCurrentReviewablePullRequest(pr, headSha) {
+  if (!pr || typeof pr !== "object") return false;
+  return (
+    pr.state === "open" &&
+    pr.draft === false &&
+    typeof pr.head?.sha === "string" &&
+    pr.head.sha === headSha
+  );
+}
+
+/**
  * Formats structured metadata into the stable HTML marker comment string.
  */
 export function buildMarkerPayload(data) {
@@ -65,8 +78,7 @@ export function parseMarkerPayload(commentBody) {
 
 /**
  * Generates human-readable Markdown body with top-level marker for PR comments.
- * An optional GitHub login mention turns the durable Gate evidence into an
- * immediate native GitHub notification without adding an external service.
+ * notifyLogin is optional and disabled by default.
  */
 export function buildCommentBody({
   prNumber,
@@ -232,6 +244,8 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     prNumbers = prs.map((pr) => pr.number).filter((n) => typeof n === "number");
   }
 
+  prNumbers = [...new Set(prNumbers)];
+
   if (prNumbers.length === 0) {
     console.log(`No associated PR found for head SHA ${headSha}. Nothing to report.`);
     return;
@@ -249,6 +263,21 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     if (isRunAlreadyNotified(existingMarkerPayloads, currentData)) {
       console.log(
         `Notification for PR #${prNumber}, runId ${runId}, attempt ${runAttempt}, headSha ${headSha} already exists from github-actions[bot]. Skipping duplicate posting.`
+      );
+      continue;
+    }
+
+    // Re-read the PR immediately before posting. Historical workflow_run data and
+    // commit-to-PR fallback results are not sufficient proof that the PR is still
+    // open, reviewable, and on the same revision.
+    const currentPr = await apiFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+    if (!currentPr || typeof currentPr !== "object" || Array.isArray(currentPr)) {
+      throw new Error(`Unexpected pull request API response for PR #${prNumber}`);
+    }
+
+    if (!isCurrentReviewablePullRequest(currentPr, headSha)) {
+      console.log(
+        `PR #${prNumber} is not an open, non-draft PR at head SHA ${headSha}. Skipping notification.`
       );
       continue;
     }
