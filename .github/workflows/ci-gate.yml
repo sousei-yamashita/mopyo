@@ -8,8 +8,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: write
+  pull-requests: write
 
 concurrency:
   group: ci-gate-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
