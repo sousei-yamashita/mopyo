@@ -1,0 +1,252 @@
+name: Copilot Review Autofix Handoff
+
+on:
+  pull_request_review:
+    types:
+      - submitted
+
+concurrency:
+  group: copilot-autofix-handoff-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  handoff:
+    if: github.event.review.user.login == 'copilot-pull-request-reviewer[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Post @copilot autofix request when review has findings
+        uses: actions/github-script@v7
+        env:
+          MAX_AUTOFIX_ATTEMPTS: "3"
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const review = context.payload.review;
+            const headSha = context.payload.pull_request.head.sha;
+            const maxAttempts = Number(process.env.MAX_AUTOFIX_ATTEMPTS || "3");
+            const trustedAuthorLogin = "github-actions[bot]";
+            const handoffMarkerRe = /^<!-- mopyo-copilot-autofix v1 review:(\d+) head:([0-9a-f]{40}) attempt:(\d+)\/(\d+) -->$/;
+            const stopMarkerRe = /^<!-- mopyo-copilot-autofix-stop v2 pr attempt:(\d+)\/(\d+) -->$/;
+            const legacyStopMarkerRe = /^<!-- mopyo-copilot-autofix-stop v1 head:([0-9a-f]{40}) -->$/;
+            const handoffRequestLine = "@copilot Copilot Code Review の指摘対応をお願いします。";
+            const stopNoticeLine = "自動修正の上限回数に達したため、このPRの自動中継を停止しました。";
+            const handoffStopLine = "この自動中継は今回で停止します。";
+            const actionableSummaryRe = /^#{1,6}\s*(?:\S+\s+)?Changes recommended\s*$/im;
+
+            const isActionableReview = (review, reviewSpecificComments) => {
+              if ((review?.state || "").toLowerCase() === "changes_requested") return true;
+              if ((reviewSpecificComments || []).length > 0) return true;
+              const body = String(review?.body || "");
+              if (!body.trim()) return false;
+              return actionableSummaryRe.test(body);
+            };
+
+            const buildHandoffMarker = ({ reviewId, headSha, attempt, maxAttempts }) =>
+              `<!-- mopyo-copilot-autofix v1 review:${reviewId} head:${headSha} attempt:${attempt}/${maxAttempts} -->`;
+
+            const buildStopMarker = ({ attempt, maxAttempts }) =>
+              `<!-- mopyo-copilot-autofix-stop v2 pr attempt:${attempt}/${maxAttempts} -->`;
+
+            const splitCommentLines = body =>
+              String(body || "")
+                .split("\n")
+                .map(line => line.trim());
+
+            const parseTrustedHandoffComment = body => {
+              const lines = splitCommentLines(body);
+              const match = (lines[0] || "").match(handoffMarkerRe);
+              if (!match || lines[1] !== handoffRequestLine) return null;
+              return {
+                reviewId: Number(match[1]),
+                headSha: match[2],
+                attempt: Number(match[3]),
+                maxAttempts: Number(match[4])
+              };
+            };
+
+            const parseTrustedStopComment = body => {
+              const lines = splitCommentLines(body);
+              const markerLine = lines.find(line => stopMarkerRe.test(line)) || "";
+              const stopMatch = markerLine.match(stopMarkerRe);
+              const isTrustedStandaloneStop = lines[0] === markerLine && lines[1] === stopNoticeLine;
+              const isTrustedEmbeddedStop =
+                lines[1] === handoffRequestLine &&
+                lines.includes(handoffStopLine);
+              if (stopMatch && (isTrustedStandaloneStop || isTrustedEmbeddedStop)) {
+                return {
+                  attempt: Number(stopMatch[1]),
+                  maxAttempts: Number(stopMatch[2])
+                };
+              }
+              const legacyMarkerLine = lines.find(line => legacyStopMarkerRe.test(line)) || "";
+              const legacyStopMatch = legacyMarkerLine.match(legacyStopMarkerRe);
+              if (legacyStopMatch && lines[0] === legacyMarkerLine && lines[1] === stopNoticeLine) {
+                return { attempt: Number.NaN, maxAttempts: Number.NaN };
+              }
+              return null;
+            };
+
+            const extractTrustedState = ({ comments, headSha, reviewId, trustedAuthorLogin }) => {
+              const trustedComments = (comments || []).filter(comment =>
+                comment?.user?.login === trustedAuthorLogin && comment?.user?.type === "Bot"
+              );
+              const handoffs = trustedComments
+                .map(comment => parseTrustedHandoffComment(comment.body))
+                .filter(Boolean);
+              const stops = trustedComments
+                .map(comment => parseTrustedStopComment(comment.body))
+                .filter(Boolean);
+
+              return {
+                attemptCount: handoffs.length,
+                hasDedupeForReviewHead: handoffs.some(entry => entry.reviewId === reviewId && entry.headSha === headSha),
+                hasStopForPr: stops.length > 0
+              };
+            };
+
+            const decideAutofixAction = ({
+              review,
+              reviewSpecificComments,
+              issueComments,
+              headSha,
+              maxAttempts,
+              trustedAuthorLogin
+            }) => {
+              if (!isActionableReview(review, reviewSpecificComments)) {
+                return { kind: "skip", reason: "no-actionable-findings" };
+              }
+
+              const reviewId = Number(review.id);
+              const state = extractTrustedState({
+                comments: issueComments,
+                headSha,
+                reviewId,
+                trustedAuthorLogin
+              });
+
+              if (state.hasDedupeForReviewHead) {
+                return { kind: "skip", reason: "duplicate-review-head" };
+              }
+              if (state.hasStopForPr) {
+                return { kind: "skip", reason: "pr-stopped" };
+              }
+              if (state.attemptCount >= maxAttempts) {
+                return {
+                  kind: "limit-reached",
+                  shouldCreateStop: !state.hasStopForPr,
+                  attemptCount: state.attemptCount
+                };
+              }
+
+              const nextAttempt = state.attemptCount + 1;
+              return {
+                kind: "handoff",
+                nextAttempt,
+                shouldCreateStop: nextAttempt >= maxAttempts,
+                reviewId
+              };
+            };
+
+            const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner,
+              repo,
+              pull_number: pullNumber,
+              per_page: 100
+            });
+            const reviewSpecificComments = reviewComments.filter(comment => comment.pull_request_review_id === review.id);
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pullNumber,
+              per_page: 100
+            });
+
+            const decision = decideAutofixAction({
+              review,
+              reviewSpecificComments,
+              issueComments: comments,
+              headSha,
+              maxAttempts,
+              trustedAuthorLogin
+            });
+
+            if (decision.kind === "skip") {
+              core.info(`Skipping handoff: ${decision.reason}`);
+              return;
+            }
+
+            if (decision.kind === "limit-reached") {
+              if (decision.shouldCreateStop) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pullNumber,
+                  body: [
+                    buildStopMarker({ attempt: decision.attemptCount, maxAttempts }),
+                    stopNoticeLine,
+                    "- 状態: human review required",
+                    `- Attempt budget: ${decision.attemptCount}/${maxAttempts}`,
+                    "- 以降は人間判断での対応をお願いします。"
+                  ].join("\n")
+                });
+              }
+              return;
+            }
+
+            const commentLines = reviewSpecificComments.length > 0
+              ? reviewSpecificComments.map((comment, index) => {
+                  const path = comment.path || "(path unavailable)";
+                  const line = comment.line ?? comment.original_line ?? "?";
+                  const text = (comment.body || "").trim();
+                  return `${index + 1}. ${path}:${line}\n   ${text}`;
+                })
+              : ["(inline review comments were not provided)"];
+
+            const marker = buildHandoffMarker({
+              reviewId: decision.reviewId,
+              headSha,
+              attempt: decision.nextAttempt,
+              maxAttempts
+            });
+
+            const handoffBody = [
+              marker,
+              "@copilot Copilot Code Review の指摘対応をお願いします。",
+              "",
+              "- Trigger: pull_request_review submitted",
+              `- Review ID: ${decision.reviewId}`,
+              `- Target head SHA: ${headSha}`,
+              `- Attempt: ${decision.nextAttempt}/${maxAttempts}`,
+              "",
+              "### Review summary",
+              String(review.body || "").trim() || "(empty review body)",
+              "",
+              "### Review comments",
+              ...commentLines,
+              ...(decision.shouldCreateStop
+                ? [
+                    "",
+                    buildStopMarker({ attempt: decision.nextAttempt, maxAttempts }),
+                    handoffStopLine,
+                    `- Attempt budget exhausted: ${decision.nextAttempt}/${maxAttempts}`
+                  ]
+                : []),
+              "",
+              "このコメントに含まれる内容を修正し、必要なら回帰テストを追加してください。"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullNumber,
+              body: handoffBody
+            });
