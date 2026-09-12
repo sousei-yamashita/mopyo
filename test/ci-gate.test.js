@@ -390,9 +390,8 @@ test("workflow keeps minimum permissions, trusted checkout, per-attempt serializ
   assert.ok(workflow.includes("actions/checkout@v4"));
   assert.equal(workflow.includes("ref:"), false);
   assert.ok(workflow.includes("contents: read"));
-  assert.ok(workflow.includes("pull-requests: read"));
-  assert.ok(workflow.includes("issues: write"));
-  assert.equal(workflow.includes("pull-requests: write"), false);
+  assert.ok(workflow.includes("pull-requests: write"));
+  assert.equal(workflow.includes("issues: write"), false);
   assert.ok(workflow.includes("concurrency:"));
   assert.ok(workflow.includes("github.event.workflow_run.id"));
   assert.ok(workflow.includes("github.event.workflow_run.run_attempt"));
