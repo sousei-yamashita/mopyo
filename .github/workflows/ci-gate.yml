@@ -11,6 +11,10 @@ permissions:
   pull-requests: read
   issues: write
 
+concurrency:
+  group: ci-gate-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+
 jobs:
   gate:
     runs-on: ubuntu-latest

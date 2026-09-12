@@ -16,7 +16,6 @@ export function parseEventPayload(eventPath) {
 
 /**
  * Extracts PR numbers from workflow_run payload.
- * Handles both pull_request event triggers and target branch pushes.
  */
 export function extractPullRequestNumbers(payload) {
   const prs = payload?.workflow_run?.pull_requests;
@@ -34,6 +33,19 @@ export function isTrustedComment(comment) {
   const user = comment.user;
   if (!user || typeof user !== "object") return false;
   return user.login === "github-actions[bot]" && user.type === "Bot";
+}
+
+/**
+ * Only the current, open, reviewable PR revision may receive a Gate comment.
+ */
+export function isCurrentReviewablePullRequest(pr, headSha) {
+  if (!pr || typeof pr !== "object") return false;
+  return (
+    pr.state === "open" &&
+    pr.draft === false &&
+    typeof pr.head?.sha === "string" &&
+    pr.head.sha === headSha
+  );
 }
 
 /**
@@ -66,6 +78,7 @@ export function parseMarkerPayload(commentBody) {
 
 /**
  * Generates human-readable Markdown body with top-level marker for PR comments.
+ * notifyLogin is optional and disabled by default.
  */
 export function buildCommentBody({
   prNumber,
@@ -75,6 +88,7 @@ export function buildCommentBody({
   workflowName,
   conclusion,
   runUrl,
+  notifyLogin = "",
   createdAt = new Date().toISOString(),
 }) {
   const markerData = {
@@ -95,8 +109,9 @@ export function buildCommentBody({
       : conclusion === "cancelled"
       ? "🛑"
       : "⚠️";
+  const mention = notifyLogin ? `\n@${notifyLogin}` : "";
 
-  return `${marker}
+  return `${marker}${mention}
 ## CI Gate Result: ${statusEmoji} ${conclusion.toUpperCase()}
 
 - **Workflow**: ${workflowName}
@@ -112,7 +127,6 @@ export function buildCommentBody({
 
 /**
  * Determines whether notification for this specific run ID / SHA / PR / runAttempt has already been posted.
- * Returns true if any existing trusted comment matches the same prNumber, headSha, runId, and runAttempt.
  * Defaults runAttempt to 1 if not present in legacy markers for backward compatibility.
  */
 export function isRunAlreadyNotified(existingMarkerPayloads, currentData) {
@@ -130,6 +144,8 @@ export function isRunAlreadyNotified(existingMarkerPayloads, currentData) {
 
 /**
  * Fetches all pages of comments for a pull request (issue comments API).
+ * Unexpected successful response shapes fail closed instead of being treated
+ * as an empty comment list.
  */
 export async function fetchAllPRComments(apiFetch, owner, repo, prNumber) {
   let page = 1;
@@ -141,7 +157,11 @@ export async function fetchAllPRComments(apiFetch, owner, repo, prNumber) {
       `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`
     );
 
-    if (!Array.isArray(commentsPage) || commentsPage.length === 0) {
+    if (!Array.isArray(commentsPage)) {
+      throw new Error(`Unexpected comments API response for PR #${prNumber} page ${page}`);
+    }
+
+    if (commentsPage.length === 0) {
       break;
     }
 
@@ -164,6 +184,7 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
   const eventPath = env.GITHUB_EVENT_PATH;
   const token = env.GITHUB_TOKEN;
   const repository = env.GITHUB_REPOSITORY;
+  const notifyLogin = env.CI_GATE_NOTIFY_LOGIN || "";
 
   if (!eventPath || !token || !repository) {
     throw new Error(
@@ -189,10 +210,8 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     workflowRun.html_url ||
     `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
 
-  // Resolve PR numbers
   let prNumbers = extractPullRequestNumbers(payload);
 
-  // Octokit / GitHub API Client setup
   const apiFetch =
     octokit ||
     (async (endpoint, options = {}) => {
@@ -218,16 +237,14 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     });
 
   if (prNumbers.length === 0 && headSha) {
-    // Fallback: Query GitHub API for PRs associated with commit SHA
-    try {
-      const prs = await apiFetch(`/repos/${owner}/${repo}/commits/${headSha}/pulls`);
-      if (Array.isArray(prs)) {
-        prNumbers = prs.map((pr) => pr.number);
-      }
-    } catch (err) {
-      console.warn(`Failed to query PRs for SHA ${headSha}: ${err.message}`);
+    const prs = await apiFetch(`/repos/${owner}/${repo}/commits/${headSha}/pulls`);
+    if (!Array.isArray(prs)) {
+      throw new Error(`Unexpected pull request lookup response for head SHA ${headSha}`);
     }
+    prNumbers = prs.map((pr) => pr.number).filter((n) => typeof n === "number");
   }
+
+  prNumbers = [...new Set(prNumbers)];
 
   if (prNumbers.length === 0) {
     console.log(`No associated PR found for head SHA ${headSha}. Nothing to report.`);
@@ -238,7 +255,6 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     const currentData = { prNumber, headSha, runId, runAttempt, workflowName, conclusion };
     const comments = await fetchAllPRComments(apiFetch, owner, repo, prNumber);
 
-    // Filter comments to ONLY parse markers from trusted github-actions[bot] comments
     const existingMarkerPayloads = comments
       .filter(isTrustedComment)
       .map((comment) => parseMarkerPayload(comment.body))
@@ -246,7 +262,22 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
 
     if (isRunAlreadyNotified(existingMarkerPayloads, currentData)) {
       console.log(
-        `Notification for PR #${prNumber}, runId ${runId}, headSha ${headSha} already exists from github-actions[bot]. Skipping duplicate posting.`
+        `Notification for PR #${prNumber}, runId ${runId}, attempt ${runAttempt}, headSha ${headSha} already exists from github-actions[bot]. Skipping duplicate posting.`
+      );
+      continue;
+    }
+
+    // Re-read the PR immediately before posting. Historical workflow_run data and
+    // commit-to-PR fallback results are not sufficient proof that the PR is still
+    // open, reviewable, and on the same revision.
+    const currentPr = await apiFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+    if (!currentPr || typeof currentPr !== "object" || Array.isArray(currentPr)) {
+      throw new Error(`Unexpected pull request API response for PR #${prNumber}`);
+    }
+
+    if (!isCurrentReviewablePullRequest(currentPr, headSha)) {
+      console.log(
+        `PR #${prNumber} is not an open, non-draft PR at head SHA ${headSha}. Skipping notification.`
       );
       continue;
     }
@@ -259,9 +290,12 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
       workflowName,
       conclusion,
       runUrl,
+      notifyLogin,
     });
 
-    console.log(`Creating new CI Gate comment on PR #${prNumber} for runId ${runId}...`);
+    console.log(
+      `Creating new CI Gate comment on PR #${prNumber} for runId ${runId}, attempt ${runAttempt}...`
+    );
     await apiFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
       method: "POST",
       body: JSON.stringify({ body: commentBody }),
@@ -269,7 +303,6 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
   }
 }
 
-// Auto-run if executed directly as a node script
 if (process.argv[1] && process.argv[1].endsWith("ci-gate.js")) {
   runCiGate().catch((err) => {
     console.error("CI Gate execution failed:", err);
