@@ -64,7 +64,7 @@ export function buildCommentBody({
   workflowName,
   conclusion,
   runUrl,
-  updatedAt = new Date().toISOString(),
+  createdAt = new Date().toISOString(),
 }) {
   const markerData = {
     prNumber,
@@ -72,10 +72,17 @@ export function buildCommentBody({
     runId,
     workflowName,
     conclusion,
-    updatedAt,
+    createdAt,
   };
   const marker = buildMarkerPayload(markerData);
-  const statusEmoji = conclusion === "success" ? "✅" : conclusion === "failure" ? "❌" : "⚠️";
+  const statusEmoji =
+    conclusion === "success"
+      ? "✅"
+      : conclusion === "failure"
+      ? "❌"
+      : conclusion === "cancelled"
+      ? "🛑"
+      : "⚠️";
 
   return `${marker}
 ## CI Gate Result: ${statusEmoji} ${conclusion.toUpperCase()}
@@ -85,22 +92,24 @@ export function buildCommentBody({
 - **Head SHA**: \`${headSha}\`
 - **Run ID**: [${runId}](${runUrl})
 - **Conclusion**: **${conclusion}**
-- **Updated At**: ${updatedAt}
+- **Created At**: ${createdAt}
 
 ---
-*This comment is automatically posted/updated by CI Gate. Machine-readable marker is embedded above for downstream automation.*`;
+*This comment is automatically created by CI Gate for run #${runId}. Machine-readable marker is embedded above for downstream automation.*`;
 }
 
 /**
- * Determines whether to skip posting/updating notification based on existing marker payload.
+ * Determines whether notification for this specific run ID / SHA / PR has already been posted.
+ * Returns true if any existing comment matches the same prNumber, headSha, and runId.
  */
-export function shouldSkipNotification(existingPayload, currentData) {
-  if (!existingPayload) return false;
-  return (
-    Number(existingPayload.prNumber) === Number(currentData.prNumber) &&
-    String(existingPayload.headSha) === String(currentData.headSha) &&
-    String(existingPayload.runId) === String(currentData.runId) &&
-    String(existingPayload.conclusion) === String(currentData.conclusion)
+export function isRunAlreadyNotified(existingMarkerPayloads, currentData) {
+  if (!Array.isArray(existingMarkerPayloads)) return false;
+  return existingMarkerPayloads.some(
+    (payload) =>
+      payload &&
+      Number(payload.prNumber) === Number(currentData.prNumber) &&
+      String(payload.headSha) === String(currentData.headSha) &&
+      String(payload.runId) === String(currentData.runId)
   );
 }
 
@@ -113,7 +122,9 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
   const repository = env.GITHUB_REPOSITORY;
 
   if (!eventPath || !token || !repository) {
-    throw new Error("Missing required environment variables (GITHUB_EVENT_PATH, GITHUB_TOKEN, GITHUB_REPOSITORY)");
+    throw new Error(
+      "Missing required environment variables (GITHUB_EVENT_PATH, GITHUB_TOKEN, GITHUB_REPOSITORY)"
+    );
   }
 
   const [owner, repo] = repository.split("/");
@@ -129,29 +140,37 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
   const runId = workflowRun.id;
   const workflowName = workflowRun.name || "CI";
   const conclusion = workflowRun.conclusion || "unknown";
-  const runUrl = workflowRun.html_url || `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+  const runUrl =
+    workflowRun.html_url ||
+    `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
 
   // Resolve PR numbers
   let prNumbers = extractPullRequestNumbers(payload);
 
   // Octokit / GitHub API Client setup
-  const apiFetch = octokit || (async (endpoint, options = {}) => {
-    const url = endpoint.startsWith("https://") ? endpoint : `https://api.github.com${endpoint}`;
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...(options.headers || {}),
-      },
+  const apiFetch =
+    octokit ||
+    (async (endpoint, options = {}) => {
+      const url = endpoint.startsWith("https://")
+        ? endpoint
+        : `https://api.github.com${endpoint}`;
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          ...(options.headers || {}),
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(
+          `GitHub API request failed: ${res.status} ${res.statusText} - ${text}`
+        );
+      }
+      return res.json();
     });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`GitHub API request failed: ${res.status} ${res.statusText} - ${text}`);
-    }
-    return res.json();
-  });
 
   if (prNumbers.length === 0 && headSha) {
     // Fallback: Query GitHub API for PRs associated with commit SHA
@@ -174,23 +193,14 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     const currentData = { prNumber, headSha, runId, workflowName, conclusion };
     const comments = await apiFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`);
 
-    // Find top-level comment containing CI Gate marker
-    let existingComment = null;
-    let existingMarkerPayload = null;
+    const existingMarkerPayloads = Array.isArray(comments)
+      ? comments.map((comment) => parseMarkerPayload(comment.body)).filter(Boolean)
+      : [];
 
-    if (Array.isArray(comments)) {
-      for (const comment of comments) {
-        const parsed = parseMarkerPayload(comment.body);
-        if (parsed) {
-          existingComment = comment;
-          existingMarkerPayload = parsed;
-          break;
-        }
-      }
-    }
-
-    if (shouldSkipNotification(existingMarkerPayload, currentData)) {
-      console.log(`Notification for PR #${prNumber}, runId ${runId}, headSha ${headSha}, status '${conclusion}' already up to date. Skipping.`);
+    if (isRunAlreadyNotified(existingMarkerPayloads, currentData)) {
+      console.log(
+        `Notification for PR #${prNumber}, runId ${runId}, headSha ${headSha} already exists. Skipping duplicate posting.`
+      );
       continue;
     }
 
@@ -203,19 +213,11 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
       runUrl,
     });
 
-    if (existingComment) {
-      console.log(`Updating existing CI Gate comment ${existingComment.id} on PR #${prNumber}...`);
-      await apiFetch(`/repos/${owner}/${repo}/issues/comments/${existingComment.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ body: commentBody }),
-      });
-    } else {
-      console.log(`Creating new CI Gate comment on PR #${prNumber}...`);
-      await apiFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
-        method: "POST",
-        body: JSON.stringify({ body: commentBody }),
-      });
-    }
+    console.log(`Creating new CI Gate comment on PR #${prNumber} for runId ${runId}...`);
+    await apiFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body: commentBody }),
+    });
   }
 }
 
