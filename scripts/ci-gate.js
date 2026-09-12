@@ -71,6 +71,7 @@ export function buildCommentBody({
   prNumber,
   headSha,
   runId,
+  runAttempt = 1,
   workflowName,
   conclusion,
   runUrl,
@@ -80,6 +81,7 @@ export function buildCommentBody({
     prNumber,
     headSha,
     runId,
+    runAttempt,
     workflowName,
     conclusion,
     createdAt,
@@ -100,27 +102,59 @@ export function buildCommentBody({
 - **Workflow**: ${workflowName}
 - **PR Number**: #${prNumber}
 - **Head SHA**: \`${headSha}\`
-- **Run ID**: [${runId}](${runUrl})
+- **Run ID**: [${runId}](${runUrl}) (Attempt #${runAttempt})
 - **Conclusion**: **${conclusion}**
 - **Created At**: ${createdAt}
 
 ---
-*This comment is automatically created by CI Gate for run #${runId}. Machine-readable marker is embedded above for downstream automation.*`;
+*This comment is automatically created by CI Gate for run #${runId} (attempt #${runAttempt}). Machine-readable marker is embedded above for downstream automation.*`;
 }
 
 /**
- * Determines whether notification for this specific run ID / SHA / PR has already been posted.
- * Returns true if any existing trusted comment matches the same prNumber, headSha, and runId.
+ * Determines whether notification for this specific run ID / SHA / PR / runAttempt has already been posted.
+ * Returns true if any existing trusted comment matches the same prNumber, headSha, runId, and runAttempt.
+ * Defaults runAttempt to 1 if not present in legacy markers for backward compatibility.
  */
 export function isRunAlreadyNotified(existingMarkerPayloads, currentData) {
   if (!Array.isArray(existingMarkerPayloads)) return false;
+  const currentAttempt = currentData.runAttempt !== undefined ? Number(currentData.runAttempt) : 1;
   return existingMarkerPayloads.some(
     (payload) =>
       payload &&
       Number(payload.prNumber) === Number(currentData.prNumber) &&
       String(payload.headSha) === String(currentData.headSha) &&
-      String(payload.runId) === String(currentData.runId)
+      String(payload.runId) === String(currentData.runId) &&
+      Number(payload.runAttempt !== undefined ? payload.runAttempt : 1) === currentAttempt
   );
+}
+
+/**
+ * Fetches all pages of comments for a pull request (issue comments API).
+ */
+export async function fetchAllPRComments(apiFetch, owner, repo, prNumber) {
+  let page = 1;
+  const perPage = 100;
+  const allComments = [];
+
+  while (true) {
+    const commentsPage = await apiFetch(
+      `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=${perPage}&page=${page}`
+    );
+
+    if (!Array.isArray(commentsPage) || commentsPage.length === 0) {
+      break;
+    }
+
+    allComments.push(...commentsPage);
+
+    if (commentsPage.length < perPage) {
+      break;
+    }
+
+    page++;
+  }
+
+  return allComments;
 }
 
 /**
@@ -148,6 +182,7 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
 
   const headSha = workflowRun.head_sha;
   const runId = workflowRun.id;
+  const runAttempt = workflowRun.run_attempt || 1;
   const workflowName = workflowRun.name || "CI";
   const conclusion = workflowRun.conclusion || "unknown";
   const runUrl =
@@ -200,16 +235,14 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
   }
 
   for (const prNumber of prNumbers) {
-    const currentData = { prNumber, headSha, runId, workflowName, conclusion };
-    const comments = await apiFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`);
+    const currentData = { prNumber, headSha, runId, runAttempt, workflowName, conclusion };
+    const comments = await fetchAllPRComments(apiFetch, owner, repo, prNumber);
 
     // Filter comments to ONLY parse markers from trusted github-actions[bot] comments
-    const existingMarkerPayloads = Array.isArray(comments)
-      ? comments
-          .filter(isTrustedComment)
-          .map((comment) => parseMarkerPayload(comment.body))
-          .filter(Boolean)
-      : [];
+    const existingMarkerPayloads = comments
+      .filter(isTrustedComment)
+      .map((comment) => parseMarkerPayload(comment.body))
+      .filter(Boolean);
 
     if (isRunAlreadyNotified(existingMarkerPayloads, currentData)) {
       console.log(
@@ -222,6 +255,7 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
       prNumber,
       headSha,
       runId,
+      runAttempt,
       workflowName,
       conclusion,
       runUrl,

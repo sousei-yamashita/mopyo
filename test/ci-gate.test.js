@@ -103,22 +103,155 @@ test("buildCommentBody produces formatted markdown with marker and distinguishes
   assert.equal(parsedCancelled.conclusion, "cancelled");
 });
 
-test("isRunAlreadyNotified detects duplicates per PR, SHA, and run ID accurately", () => {
+test("isRunAlreadyNotified detects duplicates per PR, SHA, run ID, and runAttempt accurately", () => {
   const existingList = [
-    { prNumber: 7, headSha: "sha123", runId: 555, conclusion: "success" },
+    { prNumber: 7, headSha: "sha123", runId: 555, runAttempt: 1, conclusion: "failure" },
   ];
 
-  const sameRun = { prNumber: 7, headSha: "sha123", runId: 555, conclusion: "success" };
-  const sameRunDiffConclusion = { prNumber: 7, headSha: "sha123", runId: 555, conclusion: "failure" };
-  const newRunSameSha = { prNumber: 7, headSha: "sha123", runId: 556, conclusion: "success" };
-  const newShaSameRunId = { prNumber: 7, headSha: "sha999", runId: 555, conclusion: "success" };
+  const sameRunAttempt = { prNumber: 7, headSha: "sha123", runId: 555, runAttempt: 1, conclusion: "failure" };
+  const sameRunDiffAttempt = { prNumber: 7, headSha: "sha123", runId: 555, runAttempt: 2, conclusion: "success" };
+  const newRunSameSha = { prNumber: 7, headSha: "sha123", runId: 556, runAttempt: 1, conclusion: "success" };
 
-  assert.equal(isRunAlreadyNotified(existingList, sameRun), true);
-  assert.equal(isRunAlreadyNotified(existingList, sameRunDiffConclusion), true);
-
+  assert.equal(isRunAlreadyNotified(existingList, sameRunAttempt), true);
+  assert.equal(isRunAlreadyNotified(existingList, sameRunDiffAttempt), false);
   assert.equal(isRunAlreadyNotified(existingList, newRunSameSha), false);
-  assert.equal(isRunAlreadyNotified(existingList, newShaSameRunId), false);
-  assert.equal(isRunAlreadyNotified([], sameRun), false);
+  assert.equal(isRunAlreadyNotified([], sameRunAttempt), false);
+});
+
+test("runCiGate notifies rerun success after failure or cancellation (run_attempt increment)", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  // Attempt 2 succeeded after attempt 1 failed
+  const payloadRerunSuccess = {
+    workflow_run: {
+      id: 20001,
+      run_attempt: 2,
+      name: "CI",
+      head_sha: "headsha123",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/20001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payloadRerunSuccess));
+
+  const existingAttempt1FailureCommentBody = buildCommentBody({
+    prNumber: 99,
+    headSha: "headsha123",
+    runId: 20001,
+    runAttempt: 1,
+    workflowName: "CI",
+    conclusion: "failure",
+    runUrl: "https://github.com/owner/repo/actions/runs/20001",
+  });
+
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
+      return [
+        {
+          user: { login: "github-actions[bot]", type: "Bot" },
+          body: existingAttempt1FailureCommentBody,
+        },
+      ];
+    }
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
+      return { id: 3001, body: options.body };
+    }
+    return {};
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
+  });
+
+  // Must post a new comment for attempt 2 despite attempt 1 failure comment existing
+  assert.ok(apiCalls.some((call) => call.options.method === "POST"));
+
+  const postCall = apiCalls.find((call) => call.options.method === "POST");
+  const postedBody = JSON.parse(postCall.options.body).body;
+  const parsedMarker = parseMarkerPayload(postedBody);
+  assert.equal(parsedMarker.runId, 20001);
+  assert.equal(parsedMarker.runAttempt, 2);
+  assert.equal(parsedMarker.conclusion, "success");
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("runCiGate pagination retrieves trusted markers across all pages", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  const payload = {
+    workflow_run: {
+      id: 30001,
+      run_attempt: 1,
+      name: "CI",
+      head_sha: "headsha789",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/30001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+
+  const page1Comments = Array.from({ length: 100 }, (_, i) => ({
+    user: { login: `user${i}`, type: "User" },
+    body: `Comment ${i}`,
+  }));
+
+  const markerCommentOnPage2 = buildCommentBody({
+    prNumber: 99,
+    headSha: "headsha789",
+    runId: 30001,
+    runAttempt: 1,
+    workflowName: "CI",
+    conclusion: "success",
+    runUrl: "https://github.com/owner/repo/actions/runs/30001",
+  });
+
+  const page2Comments = [
+    {
+      user: { login: "github-actions[bot]", type: "Bot" },
+      body: markerCommentOnPage2,
+    },
+  ];
+
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    const url = new URL(endpoint, "https://api.github.com");
+    if (url.searchParams.get("page") === "1") {
+      return page1Comments;
+    }
+    if (url.searchParams.get("page") === "2") {
+      return page2Comments;
+    }
+    return [];
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
+  });
+
+  // Should fetch both page 1 and page 2, find trusted marker on page 2, and skip duplicate POST
+  assert.ok(apiCalls.some((call) => call.endpoint.includes("page=1")));
+  assert.ok(apiCalls.some((call) => call.endpoint.includes("page=2")));
+  assert.equal(apiCalls.filter((call) => call.options && call.options.method === "POST").length, 0);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test("runCiGate skips notification ONLY when trusted github-actions[bot] comment contains identical marker", async () => {
@@ -157,7 +290,7 @@ test("runCiGate skips notification ONLY when trusted github-actions[bot] comment
   let apiCalls = [];
   let mockOctokit = async (endpoint, options = {}) => {
     apiCalls.push({ endpoint, options });
-    if (endpoint === "/repos/owner/repo/issues/99/comments") {
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments")) {
       return trustedComments;
     }
     return {};
@@ -174,7 +307,7 @@ test("runCiGate skips notification ONLY when trusted github-actions[bot] comment
 
   // Should skip posting because trusted github-actions[bot] comment exists
   assert.equal(apiCalls.length, 1);
-  assert.equal(apiCalls[0].endpoint, "/repos/owner/repo/issues/99/comments");
+  assert.ok(apiCalls[0].endpoint.startsWith("/repos/owner/repo/issues/99/comments"));
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -219,10 +352,10 @@ test("runCiGate DOES NOT skip notification when user or untrusted bot posts fake
   const apiCalls = [];
   const mockOctokit = async (endpoint, options = {}) => {
     apiCalls.push({ endpoint, options });
-    if (endpoint === "/repos/owner/repo/issues/99/comments" && (!options.method || options.method === "GET")) {
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
       return untrustedComments;
     }
-    if (endpoint === "/repos/owner/repo/issues/99/comments" && options.method === "POST") {
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
       return { id: 2002, body: options.body };
     }
     return {};
@@ -272,10 +405,10 @@ test("runCiGate creates a new top-level comment when a new run ID arrives for an
   const apiCalls = [];
   const mockOctokit = async (endpoint, options = {}) => {
     apiCalls.push({ endpoint, options });
-    if (endpoint === "/repos/owner/repo/issues/99/comments" && (!options.method || options.method === "GET")) {
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
       return [{ user: { login: "github-actions[bot]", type: "Bot" }, body: existingCommentBody }];
     }
-    if (endpoint === "/repos/owner/repo/issues/99/comments" && options.method === "POST") {
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
       return { id: 889, body: options.body };
     }
     return {};
