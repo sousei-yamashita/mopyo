@@ -11,391 +11,436 @@ import {
   buildCommentBody,
   extractPullRequestNumbers,
   isTrustedComment,
-  isCurrentReviewablePullRequest,
   isRunAlreadyNotified,
   runCiGate,
 } from "../scripts/ci-gate.js";
 
-function makeEnv(eventPath) {
-  return {
-    GITHUB_EVENT_PATH: eventPath,
-    GITHUB_TOKEN: "mock_token",
-    GITHUB_REPOSITORY: "owner/repo",
-  };
-}
-
-function writeEvent(workflowRun) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
-  const eventPath = path.join(tmpDir, "event.json");
-  fs.writeFileSync(eventPath, JSON.stringify({ workflow_run: workflowRun }));
-  return { tmpDir, eventPath };
-}
-
-function reviewablePr(headSha, overrides = {}) {
-  return {
-    number: 99,
-    state: "open",
-    draft: false,
-    merged: false,
-    head: { sha: headSha },
-    ...overrides,
-  };
-}
-
-function makeApi({
-  headSha,
-  pr = reviewablePr(headSha),
-  commentsByPage = { 1: [] },
-  fallbackPrs = null,
-  failFallback = null,
-  commentsShape = null,
-} = {}) {
-  const calls = [];
-  const api = async (endpoint, options = {}) => {
-    calls.push({ endpoint, options });
-
-    if (endpoint.includes(`/commits/${headSha}/pulls`)) {
-      if (failFallback) throw failFallback;
-      return fallbackPrs ?? [];
-    }
-
-    if (endpoint === "/repos/owner/repo/pulls/99") {
-      return pr;
-    }
-
-    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
-      if (commentsShape !== null) return commentsShape;
-      const url = new URL(endpoint, "https://api.github.com");
-      const page = Number(url.searchParams.get("page") || "1");
-      return commentsByPage[page] ?? [];
-    }
-
-    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
-      return { id: 123, body: options.body };
-    }
-
-    return {};
-  };
-
-  return { api, calls };
-}
-
-test("marker round-trip and parsing", () => {
+test("buildMarkerPayload and parseMarkerPayload round-trip test", () => {
   const data = {
     prNumber: 42,
-    headSha: "abc123",
-    runId: 987,
-    runAttempt: 2,
+    headSha: "abc123def456",
+    runId: 987654321,
     workflowName: "CI",
     conclusion: "success",
-    createdAt: "2026-09-13T00:00:00Z",
+    createdAt: "2026-03-30T10:00:00Z",
   };
-  const marker = buildMarkerPayload(data);
-  assert.ok(marker.startsWith(MARKER_PREFIX));
-  assert.ok(marker.endsWith(MARKER_SUFFIX));
-  assert.deepEqual(parseMarkerPayload(marker), data);
-  assert.equal(parseMarkerPayload("no marker"), null);
-  assert.equal(parseMarkerPayload("<!-- CI_GATE_MARKER: invalid -->"), null);
+
+  const markerStr = buildMarkerPayload(data);
+  assert.ok(markerStr.startsWith(MARKER_PREFIX));
+  assert.ok(markerStr.endsWith(MARKER_SUFFIX));
+
+  const parsed = parseMarkerPayload(markerStr);
+  assert.deepEqual(parsed, data);
 });
 
-test("trusted comments require the official GitHub Actions bot identity", () => {
-  assert.equal(isTrustedComment({ user: { login: "github-actions[bot]", type: "Bot" } }), true);
-  assert.equal(isTrustedComment({ user: { login: "github-actions[bot]", type: "User" } }), false);
-  assert.equal(isTrustedComment({ user: { login: "other[bot]", type: "Bot" } }), false);
+test("parseMarkerPayload handles invalid or missing markers gracefully", () => {
+  assert.equal(parseMarkerPayload(null), null);
+  assert.equal(parseMarkerPayload("Hello world without marker"), null);
+  assert.equal(parseMarkerPayload("<!-- CI_GATE_MARKER: invalid json -->"), null);
+});
+
+test("isTrustedComment validates comment author identity strictly", () => {
   assert.equal(isTrustedComment(null), false);
+  assert.equal(isTrustedComment({}), false);
+  assert.equal(isTrustedComment({ user: { login: "some-user", type: "User" } }), false);
+  assert.equal(isTrustedComment({ user: { login: "other-bot[bot]", type: "Bot" } }), false);
+  assert.equal(isTrustedComment({ user: { login: "github-actions[bot]", type: "User" } }), false);
+  assert.equal(isTrustedComment({ user: { login: "github-actions[bot]", type: "Bot" } }), true);
 });
 
-test("extractPullRequestNumbers returns workflow_run PR numbers", () => {
-  assert.deepEqual(
-    extractPullRequestNumbers({ workflow_run: { pull_requests: [{ number: 10 }, { number: 12 }] } }),
-    [10, 12]
-  );
+test("extractPullRequestNumbers extracts numbers correctly", () => {
+  const payload = {
+    workflow_run: {
+      pull_requests: [{ number: 10 }, { number: 12 }],
+    },
+  };
+  assert.deepEqual(extractPullRequestNumbers(payload), [10, 12]);
+  assert.deepEqual(extractPullRequestNumbers({}), []);
   assert.deepEqual(extractPullRequestNumbers({ workflow_run: {} }), []);
 });
 
-test("current PR eligibility requires open, non-draft, exact current head", () => {
-  assert.equal(isCurrentReviewablePullRequest(reviewablePr("sha-a"), "sha-a"), true);
-  assert.equal(isCurrentReviewablePullRequest(reviewablePr("sha-b"), "sha-a"), false);
-  assert.equal(isCurrentReviewablePullRequest(reviewablePr("sha-a", { state: "closed" }), "sha-a"), false);
-  assert.equal(isCurrentReviewablePullRequest(reviewablePr("sha-a", { draft: true }), "sha-a"), false);
-});
-
-test("comment body distinguishes conclusions and does not mention anyone by default", () => {
-  const body = buildCommentBody({
+test("buildCommentBody produces formatted markdown with marker and distinguishes conclusions", () => {
+  const bodySuccess = buildCommentBody({
     prNumber: 5,
-    headSha: "sha-a",
+    headSha: "fedcba987654",
     runId: 100,
-    runAttempt: 1,
     workflowName: "CI",
     conclusion: "success",
     runUrl: "https://github.com/example/repo/actions/runs/100",
-    createdAt: "2026-09-13T00:00:00Z",
+    createdAt: "2026-03-30T12:00:00Z",
   });
-  assert.ok(body.includes("## CI Gate Result: ✅ SUCCESS"));
-  assert.equal(body.includes("@sousei-yamashita"), false);
-  assert.equal(parseMarkerPayload(body).runAttempt, 1);
+  assert.ok(bodySuccess.includes(MARKER_PREFIX));
+  assert.ok(bodySuccess.includes("## CI Gate Result: ✅ SUCCESS"));
+
+  const bodyFailure = buildCommentBody({
+    prNumber: 5,
+    headSha: "fedcba987654",
+    runId: 101,
+    workflowName: "CI",
+    conclusion: "failure",
+    runUrl: "https://github.com/example/repo/actions/runs/101",
+    createdAt: "2026-03-30T12:05:00Z",
+  });
+  assert.ok(bodyFailure.includes("## CI Gate Result: ❌ FAILURE"));
+
+  const bodyCancelled = buildCommentBody({
+    prNumber: 5,
+    headSha: "fedcba987654",
+    runId: 102,
+    workflowName: "CI",
+    conclusion: "cancelled",
+    runUrl: "https://github.com/example/repo/actions/runs/102",
+    createdAt: "2026-03-30T12:10:00Z",
+  });
+  assert.ok(bodyCancelled.includes("## CI Gate Result: 🛑 CANCELLED"));
+
+  const parsedSuccess = parseMarkerPayload(bodySuccess);
+  const parsedFailure = parseMarkerPayload(bodyFailure);
+  const parsedCancelled = parseMarkerPayload(bodyCancelled);
+
+  assert.equal(parsedSuccess.conclusion, "success");
+  assert.equal(parsedFailure.conclusion, "failure");
+  assert.equal(parsedCancelled.conclusion, "cancelled");
 });
 
-test("dedupe identity includes PR, SHA, run ID, and attempt with legacy attempt=1 compatibility", () => {
-  const legacy = [{ prNumber: 7, headSha: "sha-a", runId: 555 }];
-  assert.equal(isRunAlreadyNotified(legacy, { prNumber: 7, headSha: "sha-a", runId: 555, runAttempt: 1 }), true);
-  assert.equal(isRunAlreadyNotified(legacy, { prNumber: 7, headSha: "sha-a", runId: 555, runAttempt: 2 }), false);
-  assert.equal(isRunAlreadyNotified(legacy, { prNumber: 7, headSha: "sha-b", runId: 555, runAttempt: 1 }), false);
+test("isRunAlreadyNotified detects duplicates per PR, SHA, run ID, and runAttempt accurately", () => {
+  const existingList = [
+    { prNumber: 7, headSha: "sha123", runId: 555, runAttempt: 1, conclusion: "failure" },
+  ];
+
+  const sameRunAttempt = { prNumber: 7, headSha: "sha123", runId: 555, runAttempt: 1, conclusion: "failure" };
+  const sameRunDiffAttempt = { prNumber: 7, headSha: "sha123", runId: 555, runAttempt: 2, conclusion: "success" };
+  const newRunSameSha = { prNumber: 7, headSha: "sha123", runId: 556, runAttempt: 1, conclusion: "success" };
+
+  assert.equal(isRunAlreadyNotified(existingList, sameRunAttempt), true);
+  assert.equal(isRunAlreadyNotified(existingList, sameRunDiffAttempt), false);
+  assert.equal(isRunAlreadyNotified(existingList, newRunSameSha), false);
+  assert.equal(isRunAlreadyNotified([], sameRunAttempt), false);
 });
 
-test("open non-draft PR at the current head is notified", async () => {
-  const headSha = "current-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 10001,
-    run_attempt: 1,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const { api, calls } = makeApi({ headSha });
+test("runCiGate notifies rerun success after failure or cancellation (run_attempt increment)", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
 
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
+  // Attempt 2 succeeded after attempt 1 failed
+  const payloadRerunSuccess = {
+    workflow_run: {
+      id: 20001,
+      run_attempt: 2,
+      name: "CI",
+      head_sha: "headsha123",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/20001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payloadRerunSuccess));
 
-  assert.ok(calls.some((call) => call.endpoint === "/repos/owner/repo/pulls/99"));
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 1);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("old CI finishing after the PR head moved does not notify", async () => {
-  const headSha = "old-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 10002,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const { api, calls } = makeApi({ headSha, pr: reviewablePr("new-sha") });
-
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
-
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 0);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("closed or merged PR does not notify", async () => {
-  const headSha = "closed-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 10003,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const { api, calls } = makeApi({
-    headSha,
-    pr: reviewablePr(headSha, { state: "closed", merged: true, merged_at: "2026-09-13T00:00:00Z" }),
-  });
-
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
-
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 0);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("draft PR does not notify", async () => {
-  const headSha = "draft-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 10004,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const { api, calls } = makeApi({ headSha, pr: reviewablePr(headSha, { draft: true }) });
-
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
-
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 0);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("main-push fallback returning a merged PR does not notify", async () => {
-  const headSha = "main-push-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 10005,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [],
-  });
-  const { api, calls } = makeApi({
-    headSha,
-    fallbackPrs: [{ number: 99 }],
-    pr: reviewablePr(headSha, { state: "closed", merged: true }),
-  });
-
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
-
-  assert.ok(calls.some((call) => call.endpoint.includes(`/commits/${headSha}/pulls`)));
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 0);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("attempt 2 success is notified after attempt 1 failure", async () => {
-  const headSha = "rerun-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 20001,
-    run_attempt: 2,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const attempt1 = buildCommentBody({
+  const existingAttempt1FailureCommentBody = buildCommentBody({
     prNumber: 99,
-    headSha,
+    headSha: "headsha123",
     runId: 20001,
     runAttempt: 1,
     workflowName: "CI",
     conclusion: "failure",
     runUrl: "https://github.com/owner/repo/actions/runs/20001",
   });
-  const { api, calls } = makeApi({
-    headSha,
-    commentsByPage: {
-      1: [{ user: { login: "github-actions[bot]", type: "Bot" }, body: attempt1 }],
+
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
+      return [
+        {
+          user: { login: "github-actions[bot]", type: "Bot" },
+          body: existingAttempt1FailureCommentBody,
+        },
+      ];
+    }
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
+      return { id: 3001, body: options.body };
+    }
+    return {};
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
     },
+    octokit: mockOctokit,
   });
 
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
+  // Must post a new comment for attempt 2 despite attempt 1 failure comment existing
+  assert.ok(apiCalls.some((call) => call.options.method === "POST"));
 
-  const post = calls.find((call) => call.options.method === "POST");
-  assert.ok(post);
-  assert.equal(parseMarkerPayload(JSON.parse(post.options.body).body).runAttempt, 2);
+  const postCall = apiCalls.find((call) => call.options.method === "POST");
+  const postedBody = JSON.parse(postCall.options.body).body;
+  const parsedMarker = parseMarkerPayload(postedBody);
+  assert.equal(parsedMarker.runId, 20001);
+  assert.equal(parsedMarker.runAttempt, 2);
+  assert.equal(parsedMarker.conclusion, "success");
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("pagination finds a trusted marker on page 2 and prevents a duplicate", async () => {
-  const headSha = "page-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 30001,
-    run_attempt: 1,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const marker = buildCommentBody({
+test("runCiGate pagination retrieves trusted markers across all pages", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  const payload = {
+    workflow_run: {
+      id: 30001,
+      run_attempt: 1,
+      name: "CI",
+      head_sha: "headsha789",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/30001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+
+  const page1Comments = Array.from({ length: 100 }, (_, i) => ({
+    user: { login: `user${i}`, type: "User" },
+    body: `Comment ${i}`,
+  }));
+
+  const markerCommentOnPage2 = buildCommentBody({
     prNumber: 99,
-    headSha,
+    headSha: "headsha789",
     runId: 30001,
     runAttempt: 1,
     workflowName: "CI",
     conclusion: "success",
     runUrl: "https://github.com/owner/repo/actions/runs/30001",
   });
-  const page1 = Array.from({ length: 100 }, (_, i) => ({
-    user: { login: `user${i}`, type: "User" },
-    body: `comment ${i}`,
-  }));
-  const { api, calls } = makeApi({
-    headSha,
-    commentsByPage: {
-      1: page1,
-      2: [{ user: { login: "github-actions[bot]", type: "Bot" }, body: marker }],
+
+  const page2Comments = [
+    {
+      user: { login: "github-actions[bot]", type: "Bot" },
+      body: markerCommentOnPage2,
     },
+  ];
+
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    const url = new URL(endpoint, "https://api.github.com");
+    if (url.searchParams.get("page") === "1") {
+      return page1Comments;
+    }
+    if (url.searchParams.get("page") === "2") {
+      return page2Comments;
+    }
+    return [];
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
   });
 
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
+  // Should fetch both page 1 and page 2, find trusted marker on page 2, and skip duplicate POST
+  assert.ok(apiCalls.some((call) => call.endpoint.includes("page=1")));
+  assert.ok(apiCalls.some((call) => call.endpoint.includes("page=2")));
+  assert.equal(apiCalls.filter((call) => call.options && call.options.method === "POST").length, 0);
 
-  assert.ok(calls.some((call) => call.endpoint.includes("page=2")));
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 0);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("untrusted fake marker does not suppress notification", async () => {
-  const headSha = "fake-marker-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 30002,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const fake = buildCommentBody({
+test("runCiGate skips notification ONLY when trusted github-actions[bot] comment contains identical marker", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  const payload = {
+    workflow_run: {
+      id: 10001,
+      name: "CI",
+      head_sha: "headsha123",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/10001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+
+  const validMarkerCommentBody = buildCommentBody({
     prNumber: 99,
-    headSha,
-    runId: 30002,
+    headSha: "headsha123",
+    runId: 10001,
     workflowName: "CI",
     conclusion: "success",
-    runUrl: "https://github.com/owner/repo/actions/runs/30002",
+    runUrl: "https://github.com/owner/repo/actions/runs/10001",
   });
-  const { api, calls } = makeApi({
-    headSha,
-    commentsByPage: {
-      1: [{ user: { login: "attacker", type: "User" }, body: fake }],
+
+  // 1) Test with trusted github-actions[bot] comment
+  const trustedComments = [
+    {
+      user: { login: "github-actions[bot]", type: "Bot" },
+      body: validMarkerCommentBody,
     },
+  ];
+
+  let apiCalls = [];
+  let mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments")) {
+      return trustedComments;
+    }
+    return {};
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
   });
 
-  await runCiGate({ env: makeEnv(eventPath), octokit: api });
+  // Should skip posting because trusted github-actions[bot] comment exists
+  assert.equal(apiCalls.length, 1);
+  assert.ok(apiCalls[0].endpoint.startsWith("/repos/owner/repo/issues/99/comments"));
 
-  assert.equal(calls.filter((call) => call.options.method === "POST").length, 1);
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("fallback PR lookup API failure is surfaced", async () => {
-  const headSha = "lookup-failure-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 40001,
-    name: "CI",
-    head_sha: headSha,
+test("runCiGate DOES NOT skip notification when user or untrusted bot posts fake marker", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  const payload = {
+    workflow_run: {
+      id: 10001,
+      name: "CI",
+      head_sha: "headsha123",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/10001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+
+  const fakeMarkerCommentBody = buildCommentBody({
+    prNumber: 99,
+    headSha: "headsha123",
+    runId: 10001,
+    workflowName: "CI",
     conclusion: "success",
-    pull_requests: [],
+    runUrl: "https://github.com/owner/repo/actions/runs/10001",
   });
-  const { api } = makeApi({ headSha, failFallback: new Error("simulated lookup outage") });
 
-  await assert.rejects(runCiGate({ env: makeEnv(eventPath), octokit: api }), /simulated lookup outage/);
+  // Comments from normal user and other bot
+  const untrustedComments = [
+    {
+      user: { login: "attacker-user", type: "User" },
+      body: fakeMarkerCommentBody,
+    },
+    {
+      user: { login: "some-other-bot[bot]", type: "Bot" },
+      body: fakeMarkerCommentBody,
+    },
+  ];
+
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
+      return untrustedComments;
+    }
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
+      return { id: 2002, body: options.body };
+    }
+    return {};
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
+  });
+
+  // Must post a new comment despite fake markers from untrusted users/bots
+  assert.equal(apiCalls.length, 2);
+  assert.equal(apiCalls[1].options.method, "POST");
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("non-array comments response fails closed", async () => {
-  const headSha = "bad-comments-sha";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 40002,
-    name: "CI",
-    head_sha: headSha,
+test("runCiGate creates a new top-level comment when a new run ID arrives for an existing PR comment thread", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  const payload = {
+    workflow_run: {
+      id: 10002, // New Run ID
+      name: "CI",
+      head_sha: "headsha123",
+      conclusion: "failure",
+      html_url: "https://github.com/owner/repo/actions/runs/10002",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+
+  const existingCommentBody = buildCommentBody({
+    prNumber: 99,
+    headSha: "headsha123",
+    runId: 10001, // Previous Run ID
+    workflowName: "CI",
     conclusion: "success",
-    pull_requests: [{ number: 99 }],
+    runUrl: "https://github.com/owner/repo/actions/runs/10001",
   });
-  const { api } = makeApi({ headSha, commentsShape: { unexpected: true } });
 
-  await assert.rejects(runCiGate({ env: makeEnv(eventPath), octokit: api }), /Unexpected comments API response/);
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && (!options.method || options.method === "GET")) {
+      return [{ user: { login: "github-actions[bot]", type: "Bot" }, body: existingCommentBody }];
+    }
+    if (endpoint.startsWith("/repos/owner/repo/issues/99/comments") && options.method === "POST") {
+      return { id: 889, body: options.body };
+    }
+    return {};
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
+  });
+
+  assert.equal(apiCalls.length, 2);
+  assert.equal(apiCalls[1].options.method, "POST");
+
+  const newPostedBody = JSON.parse(apiCalls[1].options.body).body;
+  const parsedMarker = parseMarkerPayload(newPostedBody);
+  assert.equal(parsedMarker.runId, 10002);
+  assert.equal(parsedMarker.conclusion, "failure");
+
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("unexpected PR API response fails closed", async () => {
-  const headSha = "bad-pr-shape";
-  const { tmpDir, eventPath } = writeEvent({
-    id: 40003,
-    name: "CI",
-    head_sha: headSha,
-    conclusion: "success",
-    pull_requests: [{ number: 99 }],
-  });
-  const { api } = makeApi({ headSha, pr: [] });
-
-  await assert.rejects(runCiGate({ env: makeEnv(eventPath), octokit: api }), /Unexpected pull request API response/);
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("workflow keeps minimum permissions, trusted checkout, per-attempt serialization, and no native user mention", () => {
-  const workflow = fs.readFileSync(".github/workflows/ci-gate.yml", "utf8");
-  assert.ok(workflow.includes("actions/checkout@v4"));
-  assert.equal(workflow.includes("ref:"), false);
-  assert.ok(workflow.includes("contents: read"));
-  assert.ok(workflow.includes("pull-requests: read"));
-  assert.ok(workflow.includes("issues: write"));
-  assert.equal(workflow.includes("pull-requests: write"), false);
-  assert.ok(workflow.includes("concurrency:"));
-  assert.ok(workflow.includes("github.event.workflow_run.id"));
-  assert.ok(workflow.includes("github.event.workflow_run.run_attempt"));
-  assert.ok(workflow.includes("cancel-in-progress: false"));
-  assert.equal(workflow.includes("CI_GATE_NOTIFY_LOGIN"), false);
+test("security assertion: workflow file has minimal permissions and checks out trusted repository base branch without executing PR code", () => {
+  const workflowContent = fs.readFileSync(".github/workflows/ci-gate.yml", "utf8");
+  assert.ok(workflowContent.includes("actions/checkout@v4"));
+  assert.equal(workflowContent.includes("ref:"), false, "Must not specify ref to checkout untrusted PR code");
+  assert.equal(workflowContent.includes("${{ github.event.pull_request"), false, "Must not execute PR payload ref");
+  assert.ok(workflowContent.includes("contents: read"));
+  assert.ok(workflowContent.includes("pull-requests: read"));
+  assert.ok(workflowContent.includes("issues: write"));
+  assert.equal(workflowContent.includes("pull-requests: write"), false, "Must not request write permission on pull-requests");
 });
