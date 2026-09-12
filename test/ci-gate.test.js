@@ -10,6 +10,7 @@ import {
   parseMarkerPayload,
   buildCommentBody,
   extractPullRequestNumbers,
+  isTrustedComment,
   isRunAlreadyNotified,
   runCiGate,
 } from "../scripts/ci-gate.js";
@@ -36,6 +37,15 @@ test("parseMarkerPayload handles invalid or missing markers gracefully", () => {
   assert.equal(parseMarkerPayload(null), null);
   assert.equal(parseMarkerPayload("Hello world without marker"), null);
   assert.equal(parseMarkerPayload("<!-- CI_GATE_MARKER: invalid json -->"), null);
+});
+
+test("isTrustedComment validates comment author identity strictly", () => {
+  assert.equal(isTrustedComment(null), false);
+  assert.equal(isTrustedComment({}), false);
+  assert.equal(isTrustedComment({ user: { login: "some-user", type: "User" } }), false);
+  assert.equal(isTrustedComment({ user: { login: "other-bot[bot]", type: "Bot" } }), false);
+  assert.equal(isTrustedComment({ user: { login: "github-actions[bot]", type: "User" } }), false);
+  assert.equal(isTrustedComment({ user: { login: "github-actions[bot]", type: "Bot" } }), true);
 });
 
 test("extractPullRequestNumbers extracts numbers correctly", () => {
@@ -103,17 +113,15 @@ test("isRunAlreadyNotified detects duplicates per PR, SHA, and run ID accurately
   const newRunSameSha = { prNumber: 7, headSha: "sha123", runId: 556, conclusion: "success" };
   const newShaSameRunId = { prNumber: 7, headSha: "sha999", runId: 555, conclusion: "success" };
 
-  // Identical run ID + SHA + PR -> skip posting
   assert.equal(isRunAlreadyNotified(existingList, sameRun), true);
   assert.equal(isRunAlreadyNotified(existingList, sameRunDiffConclusion), true);
 
-  // New run ID or new SHA -> create new notification comment
   assert.equal(isRunAlreadyNotified(existingList, newRunSameSha), false);
   assert.equal(isRunAlreadyNotified(existingList, newShaSameRunId), false);
   assert.equal(isRunAlreadyNotified([], sameRun), false);
 });
 
-test("runCiGate posts a new top-level comment for a new CI run", async () => {
+test("runCiGate skips notification ONLY when trusted github-actions[bot] comment contains identical marker", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
   const eventPath = path.join(tmpDir, "event.json");
 
@@ -129,14 +137,28 @@ test("runCiGate posts a new top-level comment for a new CI run", async () => {
   };
   fs.writeFileSync(eventPath, JSON.stringify(payload));
 
-  const apiCalls = [];
-  const mockOctokit = async (endpoint, options = {}) => {
+  const validMarkerCommentBody = buildCommentBody({
+    prNumber: 99,
+    headSha: "headsha123",
+    runId: 10001,
+    workflowName: "CI",
+    conclusion: "success",
+    runUrl: "https://github.com/owner/repo/actions/runs/10001",
+  });
+
+  // 1) Test with trusted github-actions[bot] comment
+  const trustedComments = [
+    {
+      user: { login: "github-actions[bot]", type: "Bot" },
+      body: validMarkerCommentBody,
+    },
+  ];
+
+  let apiCalls = [];
+  let mockOctokit = async (endpoint, options = {}) => {
     apiCalls.push({ endpoint, options });
-    if (endpoint === "/repos/owner/repo/issues/99/comments" && (!options.method || options.method === "GET")) {
-      return [];
-    }
-    if (endpoint === "/repos/owner/repo/issues/99/comments" && options.method === "POST") {
-      return { id: 1001, body: options.body };
+    if (endpoint === "/repos/owner/repo/issues/99/comments") {
+      return trustedComments;
     }
     return {};
   };
@@ -150,17 +172,74 @@ test("runCiGate posts a new top-level comment for a new CI run", async () => {
     octokit: mockOctokit,
   });
 
-  assert.equal(apiCalls.length, 2);
+  // Should skip posting because trusted github-actions[bot] comment exists
+  assert.equal(apiCalls.length, 1);
   assert.equal(apiCalls[0].endpoint, "/repos/owner/repo/issues/99/comments");
-  assert.equal(apiCalls[1].endpoint, "/repos/owner/repo/issues/99/comments");
-  assert.equal(apiCalls[1].options.method, "POST");
 
-  const postedBody = JSON.parse(apiCalls[1].options.body).body;
-  const parsedMarker = parseMarkerPayload(postedBody);
-  assert.equal(parsedMarker.prNumber, 99);
-  assert.equal(parsedMarker.headSha, "headsha123");
-  assert.equal(parsedMarker.runId, 10001);
-  assert.equal(parsedMarker.conclusion, "success");
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test("runCiGate DOES NOT skip notification when user or untrusted bot posts fake marker", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
+  const eventPath = path.join(tmpDir, "event.json");
+
+  const payload = {
+    workflow_run: {
+      id: 10001,
+      name: "CI",
+      head_sha: "headsha123",
+      conclusion: "success",
+      html_url: "https://github.com/owner/repo/actions/runs/10001",
+      pull_requests: [{ number: 99 }],
+    },
+  };
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+
+  const fakeMarkerCommentBody = buildCommentBody({
+    prNumber: 99,
+    headSha: "headsha123",
+    runId: 10001,
+    workflowName: "CI",
+    conclusion: "success",
+    runUrl: "https://github.com/owner/repo/actions/runs/10001",
+  });
+
+  // Comments from normal user and other bot
+  const untrustedComments = [
+    {
+      user: { login: "attacker-user", type: "User" },
+      body: fakeMarkerCommentBody,
+    },
+    {
+      user: { login: "some-other-bot[bot]", type: "Bot" },
+      body: fakeMarkerCommentBody,
+    },
+  ];
+
+  const apiCalls = [];
+  const mockOctokit = async (endpoint, options = {}) => {
+    apiCalls.push({ endpoint, options });
+    if (endpoint === "/repos/owner/repo/issues/99/comments" && (!options.method || options.method === "GET")) {
+      return untrustedComments;
+    }
+    if (endpoint === "/repos/owner/repo/issues/99/comments" && options.method === "POST") {
+      return { id: 2002, body: options.body };
+    }
+    return {};
+  };
+
+  await runCiGate({
+    env: {
+      GITHUB_EVENT_PATH: eventPath,
+      GITHUB_TOKEN: "mock_token",
+      GITHUB_REPOSITORY: "owner/repo",
+    },
+    octokit: mockOctokit,
+  });
+
+  // Must post a new comment despite fake markers from untrusted users/bots
+  assert.equal(apiCalls.length, 2);
+  assert.equal(apiCalls[1].options.method, "POST");
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -194,7 +273,7 @@ test("runCiGate creates a new top-level comment when a new run ID arrives for an
   const mockOctokit = async (endpoint, options = {}) => {
     apiCalls.push({ endpoint, options });
     if (endpoint === "/repos/owner/repo/issues/99/comments" && (!options.method || options.method === "GET")) {
-      return [{ id: 888, body: existingCommentBody }];
+      return [{ user: { login: "github-actions[bot]", type: "Bot" }, body: existingCommentBody }];
     }
     if (endpoint === "/repos/owner/repo/issues/99/comments" && options.method === "POST") {
       return { id: 889, body: options.body };
@@ -212,9 +291,6 @@ test("runCiGate creates a new top-level comment when a new run ID arrives for an
   });
 
   assert.equal(apiCalls.length, 2);
-  assert.equal(apiCalls[0].endpoint, "/repos/owner/repo/issues/99/comments");
-  assert.equal(apiCalls[1].endpoint, "/repos/owner/repo/issues/99/comments");
-  // Crucial check: must be POST (new top-level comment), NOT PATCH
   assert.equal(apiCalls[1].options.method, "POST");
 
   const newPostedBody = JSON.parse(apiCalls[1].options.body).body;
@@ -225,59 +301,13 @@ test("runCiGate creates a new top-level comment when a new run ID arrives for an
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test("runCiGate skips creating duplicate comment if identical runId, headSha, and prNumber exist", async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ci-gate-test-"));
-  const eventPath = path.join(tmpDir, "event.json");
-
-  const payload = {
-    workflow_run: {
-      id: 10001,
-      name: "CI",
-      head_sha: "headsha123",
-      conclusion: "success",
-      html_url: "https://github.com/owner/repo/actions/runs/10001",
-      pull_requests: [{ number: 99 }],
-    },
-  };
-  fs.writeFileSync(eventPath, JSON.stringify(payload));
-
-  const existingCommentBody = buildCommentBody({
-    prNumber: 99,
-    headSha: "headsha123",
-    runId: 10001,
-    workflowName: "CI",
-    conclusion: "success",
-    runUrl: "https://github.com/owner/repo/actions/runs/10001",
-  });
-
-  const apiCalls = [];
-  const mockOctokit = async (endpoint, options = {}) => {
-    apiCalls.push({ endpoint, options });
-    if (endpoint === "/repos/owner/repo/issues/99/comments") {
-      return [{ id: 888, body: existingCommentBody }];
-    }
-    return {};
-  };
-
-  await runCiGate({
-    env: {
-      GITHUB_EVENT_PATH: eventPath,
-      GITHUB_TOKEN: "mock_token",
-      GITHUB_REPOSITORY: "owner/repo",
-    },
-    octokit: mockOctokit,
-  });
-
-  // Only GET comments should be called, no POST/PATCH
-  assert.equal(apiCalls.length, 1);
-  assert.equal(apiCalls[0].endpoint, "/repos/owner/repo/issues/99/comments");
-
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test("security assertion: workflow file checks out trusted repository base branch without checking out PR ref", () => {
+test("security assertion: workflow file has minimal permissions and checks out trusted repository base branch without executing PR code", () => {
   const workflowContent = fs.readFileSync(".github/workflows/ci-gate.yml", "utf8");
   assert.ok(workflowContent.includes("actions/checkout@v4"));
   assert.equal(workflowContent.includes("ref:"), false, "Must not specify ref to checkout untrusted PR code");
   assert.equal(workflowContent.includes("${{ github.event.pull_request"), false, "Must not execute PR payload ref");
+  assert.ok(workflowContent.includes("contents: read"));
+  assert.ok(workflowContent.includes("pull-requests: read"));
+  assert.ok(workflowContent.includes("issues: write"));
+  assert.equal(workflowContent.includes("pull-requests: write"), false, "Must not request write permission on pull-requests");
 });

@@ -27,6 +27,16 @@ export function extractPullRequestNumbers(payload) {
 }
 
 /**
+ * Verifies whether a comment author is the official GitHub Actions bot.
+ */
+export function isTrustedComment(comment) {
+  if (!comment || typeof comment !== "object") return false;
+  const user = comment.user;
+  if (!user || typeof user !== "object") return false;
+  return user.login === "github-actions[bot]" && user.type === "Bot";
+}
+
+/**
  * Formats structured metadata into the stable HTML marker comment string.
  */
 export function buildMarkerPayload(data) {
@@ -100,7 +110,7 @@ export function buildCommentBody({
 
 /**
  * Determines whether notification for this specific run ID / SHA / PR has already been posted.
- * Returns true if any existing comment matches the same prNumber, headSha, and runId.
+ * Returns true if any existing trusted comment matches the same prNumber, headSha, and runId.
  */
 export function isRunAlreadyNotified(existingMarkerPayloads, currentData) {
   if (!Array.isArray(existingMarkerPayloads)) return false;
@@ -193,13 +203,17 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
     const currentData = { prNumber, headSha, runId, workflowName, conclusion };
     const comments = await apiFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`);
 
+    // Filter comments to ONLY parse markers from trusted github-actions[bot] comments
     const existingMarkerPayloads = Array.isArray(comments)
-      ? comments.map((comment) => parseMarkerPayload(comment.body)).filter(Boolean)
+      ? comments
+          .filter(isTrustedComment)
+          .map((comment) => parseMarkerPayload(comment.body))
+          .filter(Boolean)
       : [];
 
     if (isRunAlreadyNotified(existingMarkerPayloads, currentData)) {
       console.log(
-        `Notification for PR #${prNumber}, runId ${runId}, headSha ${headSha} already exists. Skipping duplicate posting.`
+        `Notification for PR #${prNumber}, runId ${runId}, headSha ${headSha} already exists from github-actions[bot]. Skipping duplicate posting.`
       );
       continue;
     }
