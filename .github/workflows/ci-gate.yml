@@ -34,5 +34,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_GATE_NOTIFY_LOGIN: sousei-yamashita
         run: node scripts/ci-gate.js
