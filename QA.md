@@ -4,10 +4,21 @@ This file defines the minimum evidence required before a change is considered a 
 
 ## Status vocabulary
 
+Release/process stage and inspection result are separate axes. Do not combine them into one inferred status.
+
+Process stage:
+
 - **作業中** — implementation is still changing.
 - **検品中** — implementation is ready for automated and human/AI review.
-- **公開候補** — required checks passed and remaining risk is understood.
+- **公開候補** — required checks passed for the exact revision and remaining risk is understood.
 - **正規品** — the representative explicitly approved the release and the approved change was merged/published.
+
+Inspection/equipment result:
+
+- **PASS** — the defined check was executed against identified evidence and passed.
+- **NG** — the defined check was executed and found a concrete defect or requirement mismatch.
+- **EQUIPMENT STOP** — the check could not complete because the checking/automation equipment failed, was unavailable, hit quota/permission limits, or otherwise could not operate normally.
+- **UNKNOWN** — there is not enough evidence to determine PASS or NG. Missing evidence is UNKNOWN, never an implicit PASS.
 
 Only the representative can make the final publication decision.
 
@@ -16,6 +27,55 @@ Only the representative can make the final publication decision.
 Automation may inspect, implement, test, review, and prepare a pull request.
 
 Automation must not silently merge to `main` or publish a production release on its own.
+
+A successful implementation, successful CI, successful semantic review, release-candidate judgment, and final human adoption are different decisions. Do not silently combine them.
+
+## Evidence identity
+
+Every material inspection result must identify the exact object inspected. For pull-request work, record as applicable:
+
+- repository and PR number
+- base branch/base SHA
+- head branch/head SHA
+- workflow/run ID and `run_attempt`
+- actual checkout SHA when it differs from the PR head (for example a GitHub test merge commit)
+- check performed and result
+- anything not checked
+
+Evidence from an older SHA must not be reused as proof for a newer SHA without re-running or explicitly proving that the inspected object is unchanged.
+
+## Abnormal-operation standard
+
+When expected work, automation, inspection, or delivery does not complete normally, use this order. Do not jump directly from a symptom to a repair instruction.
+
+1. **Fix the phenomenon** — record the exact PR, branch, SHA, event, expected output, observed output, and time/run identifiers.
+2. **Confirm the expected specification** — identify the repository rule, task requirement, workflow contract, or product requirement that defines correct behavior.
+3. **Decompose the path** — separate event/input, worker start, processing, inspection, output, delivery destination, and downstream trigger.
+4. **Trace evidence** — find the last boundary with confirmed evidence and the first boundary without it.
+5. **Locate the failure segment** — classify the observed state as PASS, NG, EQUIPMENT STOP, or UNKNOWN for that segment.
+6. **Confirm cause** — distinguish a demonstrated cause from a plausible hypothesis. If the cause is not evidenced, keep it UNKNOWN.
+7. **Apply the minimum repair** — change only what is required for the confirmed defect. Do not silently widen scope.
+8. **Reinspect through the same path** — repeat the original path against the new exact revision; a local substitute does not automatically prove the remote path.
+9. **Prevent recurrence** — where proportionate, add a test, assertion, state, permission boundary, documented rule, or observable evidence so the same omission is harder to repeat.
+
+If an abnormal path cannot be completed safely, stop. Waiting for evidence is preferable to manufacturing a conclusion.
+
+## Equipment acceptance
+
+Adding an automation file or receiving a green unit test is not sufficient to declare an operational machine accepted.
+
+Before connecting a new automation to unattended downstream work, verify its real operating path where reasonably possible, including:
+
+- trigger occurs under the intended repository/default-branch conditions
+- permissions are the minimum required
+- untrusted PR code is not executed with privileged credentials
+- success, failure, cancellation/rerun, and duplicate processing behave as specified where applicable
+- API/tool failures surface as equipment failure rather than silent success
+- concurrent/repeated events do not create unsafe duplicate actions
+- produced evidence is tied to the correct repository, workflow, run, attempt, and SHA
+- downstream consumers validate evidence rather than trusting display text alone
+
+Until this acceptance evidence exists, mark the equipment acceptance result UNKNOWN or EQUIPMENT STOP as appropriate; do not call the line operational merely because implementation CI passed.
 
 ## Every pull request
 
@@ -65,12 +125,14 @@ Review:
 
 Before asking for final approval, the reviewer should report in ordinary language:
 
+- exact PR/head SHA inspected
 - what changed
 - what was checked
 - what passed
 - what was not checked or could not be verified
 - known remaining risks
 - whether any release-blocking issue was found
+- any EQUIPMENT STOP or UNKNOWN result still affecting a required gate
 
 Do not convert uncertainty into a pass.
 
