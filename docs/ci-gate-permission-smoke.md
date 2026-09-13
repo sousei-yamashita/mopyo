@@ -6,4 +6,6 @@ Second natural commit: trigger the Work semantic-certificate live test after CI 
 
 Third natural commit: trigger the CI Gate event-task notification smoke test.
 
+Fourth natural commit: isolate the CI Gate event-task test while the existing Work task is paused.
+
 Do not merge this test PR as part of the smoke test.
