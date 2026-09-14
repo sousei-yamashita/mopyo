@@ -1,0 +1,4 @@
+SOUSEI_LINE_WORK_SEMANTIC_V1_STALE_TEST
+
+Initial fixed individual for controlled STALE detection test.
+No runtime or product behavior change.
