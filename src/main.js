@@ -1,21 +1,17 @@
 import { scenes, encounterChoices } from "./story.js";
 import { initialState, makeResult } from "./engine.js";
 import { creatureSvg } from "./creature.js";
+import { clearStoredState, readStoredState, writeStoredState } from "./storage.js";
 
-const STORAGE_KEY = "mopyo-v01-journey";
 const app = document.querySelector("#app");
 let state = loadState();
 
 function loadState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved && saved.phase && Number.isInteger(saved.scene)) return saved;
-  } catch { /* 壊れた保存データは静かに捨てる */ }
-  return initialState();
+  return readStoredState(window.location.pathname, window) || initialState();
 }
 
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  writeStoredState(window.location.pathname, window, state);
 }
 
 function setState(next) {
@@ -112,7 +108,7 @@ function renderCard() {
     </article>
     <button class="restart" type="button">もう一度、道を歩く</button>
   </section>`;
-  app.querySelector(".restart").addEventListener("click", () => { localStorage.removeItem(STORAGE_KEY); state = initialState(); render(); });
+  app.querySelector(".restart").addEventListener("click", () => { clearStoredState(window.location.pathname, window); state = initialState(); render(); });
 }
 
 render();
