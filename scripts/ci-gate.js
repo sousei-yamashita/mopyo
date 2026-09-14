@@ -3,6 +3,9 @@ import fs from "node:fs";
 export const MARKER_PREFIX = "<!-- CI_GATE_MARKER:";
 export const MARKER_SUFFIX = "-->";
 
+const CI_GATE_USER_LOGIN = "sousei-yamashita";
+const CI_GATE_APP_SLUG = "sousei-approval-test";
+
 /**
  * Parses the event payload from workflow_run event.
  */
@@ -26,13 +29,25 @@ export function extractPullRequestNumbers(payload) {
 }
 
 /**
- * Verifies whether a comment author is the official GitHub Actions bot.
+ * Verifies whether a comment came from a trusted CI Gate identity.
+ * Legacy github-actions[bot] comments remain trusted for backward-compatible
+ * deduplication. Current Gate comments must be attributed to the repository
+ * owner as a User and performed through the dedicated GitHub App.
  */
 export function isTrustedComment(comment) {
   if (!comment || typeof comment !== "object") return false;
   const user = comment.user;
   if (!user || typeof user !== "object") return false;
-  return user.login === "github-actions[bot]" && user.type === "Bot";
+
+  const isLegacyActionsBot =
+    user.login === "github-actions[bot]" && user.type === "Bot";
+
+  const isCurrentGateApp =
+    user.login === CI_GATE_USER_LOGIN &&
+    user.type === "User" &&
+    comment.performed_via_github_app?.slug === CI_GATE_APP_SLUG;
+
+  return isLegacyActionsBot || isCurrentGateApp;
 }
 
 /**
@@ -262,7 +277,7 @@ export async function runCiGate({ env = process.env, octokit = null } = {}) {
 
     if (isRunAlreadyNotified(existingMarkerPayloads, currentData)) {
       console.log(
-        `Notification for PR #${prNumber}, runId ${runId}, attempt ${runAttempt}, headSha ${headSha} already exists from github-actions[bot]. Skipping duplicate posting.`
+        `Notification for PR #${prNumber}, runId ${runId}, attempt ${runAttempt}, headSha ${headSha} already exists from a trusted CI Gate identity. Skipping duplicate posting.`
       );
       continue;
     }
