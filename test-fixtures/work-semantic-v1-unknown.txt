@@ -1,0 +1,4 @@
+SOUSEI_LINE_WORK_SEMANTIC_V1_UNKNOWN_TEST
+
+Inert evidence file for a controlled semantic-ambiguity test.
+No runtime or product behavior change.
