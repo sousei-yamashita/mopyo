@@ -1,0 +1,4 @@
+SOUSEI_LINE_WORK_SEMANTIC_V1_PASS_TEST
+
+Purpose: create a harmless, explicit test individual for the Work semantic inspection v1 E2E path.
+This file is test evidence only. It must not change product behavior, specifications, dependencies, network access, deployment, or release authority.
