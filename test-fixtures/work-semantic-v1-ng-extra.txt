@@ -1,0 +1,3 @@
+SOUSEI_LINE_WORK_SEMANTIC_V1_NG_UNAUTHORIZED_EXTRA
+
+This inert second file intentionally exceeds the PR's explicit one-file scope for semantic NG testing.
