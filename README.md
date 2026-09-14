@@ -18,3 +18,9 @@ npm run dev
 npm test
 npm run build
 ```
+
+## Copilot review autofix handoff
+
+- `.github/workflows/copilot-autofix-handoff.yml` は Copilot Code Review の actionable finding を検出したときだけ、PR会話に自動修正依頼を中継します。
+- `scripts/copilot-autofix-handoff.js` は同じ判定・状態遷移ロジックをローカルテストで検証するための純粋関数群です。
+- `test/copilot-autofix-handoff.test.js` は権限境界、重複防止、PR単位の3回上限、偽marker、stop後の再実行抑止を確認します。
